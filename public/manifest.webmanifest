@@ -4,8 +4,8 @@
   "description": "ติดตามรายรับ ภาระหนี้ และหลักฐานการชำระเงิน",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#f6f8fb",
-  "theme_color": "#0d213d",
+  "background_color": "#f4f8ff",
+  "theme_color": "#f4f8ff",
   "lang": "th",
   "icons": [
     {

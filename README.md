@@ -1,30 +1,56 @@
 # Personal Finance PWA
 
-MVP สำหรับติดตามรายรับ ภาระหนี้ และหลักฐานการชำระเงินตาม Logic เดือนงบประมาณของผู้ใช้
+PWA สำหรับติดตามรายรับ ภาระหนี้ และหลักฐานการชำระเงิน โดยจัดงบตามเดือนที่ผู้ใช้เลือก
 
-## สิ่งที่ทำได้ใน MVP นี้
+## สถานะการเชื่อมต่อ
 
-- ดูภาพรวมรายรับ ภาระที่ต้องจ่าย และยอดคงเหลือแยกตามเดือน
-- เลือกดูเดือนงบประมาณ เช่น เงินเดือน 30 กันยายน → งบเดือนตุลาคม
-- อัปโหลดรูปหรือ PDF แล้วตรวจสอบข้อมูลก่อนยืนยัน
-- จำลองการตรวจพบข้อมูลจากสลิปตัวอย่างที่เคยอัปโหลด
-- ดูประวัติรายการ ค้นหา และกรองตามหมวดหมู่
-- ดูคำแนะนำเชิงกฎข้อมูลในหน้า AI Coach
-- เก็บข้อมูลชั่วคราวใน localStorage
-- ติดตั้งเป็น PWA และเปิดใช้งานออฟไลน์ระดับพื้นฐาน
+- โหมดทดลองเก็บรายการใน `localStorage` ของอุปกรณ์นั้น ข้อมูลจะไม่ซิงก์ระหว่าง iPhone, iPad และ Mac
+- โหมด Google อ่านและเขียนแท็บ `Transactions` ผ่าน Vercel API และ Google Apps Script
+- เมื่อยืนยันรายการ แอปจะเพิ่มแถวในชีต และอัปโหลดหลักฐานไปยังโฟลเดอร์ Drive ที่ตั้งค่าไว้
+- การซ่อนรายการเปลี่ยนสถานะในชีตเป็น `ลบแล้ว` แถวเดิมยังอยู่เพื่อให้ตรวจสอบย้อนหลังได้
+- เชื่อมต่อบัญชี Google ฝั่งเซิร์ฟเวอร์ด้วยสิทธิ์เจ้าของ Apps Script; ผู้ใช้แอปเข้าสู่ระบบด้วยรหัสผ่านแอป
 
-## เริ่มต้นใช้งาน
+## เริ่มต้นใช้งานแบบทดลอง
 
 ```bash
 npm install
 npm run dev
 ```
 
-## แนวทางต่อยอด
+ถ้าเปิดด้วย Vite โดยไม่มี Vercel API routes แอปจะแสดงป้าย **โหมดทดลอง** และใช้ข้อมูลในเครื่อง
 
-1. เชื่อม Google Apps Script หรือ API ฝั่งเซิร์ฟเวอร์เพื่ออ่าน/เขียน Google Sheets และ Google Drive
-2. ย้าย OCR/AI ไปทำฝั่งเซิร์ฟเวอร์ และให้ผู้ใช้ยืนยันข้อมูลก่อนบันทึกทุกครั้ง
-3. เพิ่มตาราง Recurring Bills และวันครบกำหนดเพื่อสร้างคำแนะนำที่แม่นขึ้น
-4. เพิ่ม Authentication สำหรับใช้งานคนเดียวหรือขยายเป็นทีม
+## เปิด Google Sheets และ Drive sync
 
-คีย์ลับและ Service Account ห้ามใส่ใน GitHub หรือในตัวแปรที่ขึ้นต้นด้วย `VITE_` ฝั่ง client
+1. เพิ่มโค้ดจาก [`apps-script/Code.gs`](apps-script/Code.gs) ในโปรเจกต์ Google Apps Script ที่มีสิทธิ์เข้าถึงชีตและโฟลเดอร์ Drive ปลายทาง
+2. ใน Apps Script เปิด **Project Settings → Script Properties** แล้วกำหนด `SPREADSHEET_ID`, `DRIVE_FOLDER_ID` และ `API_SHARED_SECRET`
+3. สร้าง Web app deployment ให้ทำงานในนามเจ้าของสคริปต์ URL ต้องลงท้ายด้วย `/exec`; ดูรายละเอียดใน [`apps-script/README.md`](apps-script/README.md)
+4. ตั้ง Vercel Environment Variables ตามชื่อใน [`.env.example`](.env.example) โดยใช้ `API_SHARED_SECRET` ค่าเดียวกับ `GOOGLE_APPS_SCRIPT_SECRET`
+5. Deploy Vercel ใหม่ เปิดแอป และเข้าสู่ระบบด้วย `APP_PASSWORD`
+
+ตัวอย่างสร้าง secret บนเครื่อง:
+
+```bash
+openssl rand -base64 36
+```
+
+สร้างค่าแยกกันสำหรับ `SESSION_SECRET` และ `GOOGLE_APPS_SCRIPT_SECRET`; เก็บทั้งสองไว้ใน password manager และอย่า commit ค่าใช้งานจริงลง Git
+
+## ข้อมูลและความปลอดภัย
+
+- Google secret อยู่ฝั่ง Vercel/Apps Script เท่านั้น ไม่มีตัวแปร `VITE_*` ที่ส่งไป browser
+- API ใช้ session cookie แบบ `HttpOnly`, `SameSite=Lax` และ `Secure` ใน production
+- API responses ไม่ถูกเก็บใน Service Worker cache
+- รับไฟล์ JPG, PNG, WebP, HEIC, HEIF และ PDF ขนาดไม่เกิน 3 MB; แอปส่งไฟล์ไป Drive หลังผู้ใช้ยืนยันรายการ
+- การอ่านข้อความจากสลิปยังเป็นการกรอกและตรวจเอง ไม่มี OCR/AI จริง
+
+## หน้าจอ
+
+- Mac: sidebar เต็มและตารางข้อมูลหลายคอลัมน์
+- iPad: sidebar แบบย่อและแถวรายการที่อ่านง่ายขึ้น
+- iPhone: เมนูด้านล่าง ปุ่มสัมผัสขนาดใหญ่ safe area และแผงตรวจรายการแบบ bottom sheet
+
+## Build
+
+```bash
+npm run build
+```

@@ -1,9 +1,40 @@
-export const monthOptions = [
-  { value: "2026-09", label: "กันยายน 2569" },
-  { value: "2026-10", label: "ตุลาคม 2569" },
-  { value: "2026-11", label: "พฤศจิกายน 2569" },
-  { value: "2026-12", label: "ธันวาคม 2569" },
-];
+const BANGKOK_TIME_ZONE = "Asia/Bangkok";
+
+function bangkokDateParts(date = new Date()) {
+  return Object.fromEntries(
+    new Intl.DateTimeFormat("en-CA", {
+      timeZone: BANGKOK_TIME_ZONE,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(date).filter((part) => part.type !== "literal").map((part) => [part.type, part.value])
+  );
+}
+
+export function getTodayDate() {
+  const { year, month, day } = bangkokDateParts();
+  return `${year}-${month}-${day}`;
+}
+
+export function getCurrentMonthValue() {
+  const { year, month } = bangkokDateParts();
+  return `${year}-${month}`;
+}
+
+export function getMonthOptions(transactions = [], extraValues = []) {
+  const currentMonth = getCurrentMonthValue();
+  const [currentYear, currentIndex] = currentMonth.split("-").map(Number);
+  const months = new Set([...transactions.map((item) => item.budgetMonth), ...extraValues].filter(Boolean));
+
+  for (let offset = -12; offset <= 24; offset += 1) {
+    const monthDate = new Date(currentYear, currentIndex - 1 + offset, 1);
+    months.add(`${monthDate.getFullYear()}-${String(monthDate.getMonth() + 1).padStart(2, "0")}`);
+  }
+
+  return [...months].sort().map((value) => ({ value, label: getMonthLabel(value) }));
+}
+
+export const monthOptions = getMonthOptions();
 
 export const categoryOptions = [
   "เงินเดือน",
@@ -32,130 +63,8 @@ export const channelOptions = [
   "อื่นๆ",
 ];
 
-export const initialTransactions = [
-  {
-    id: "TX-0001",
-    date: "2026-09-30",
-    budgetMonth: "2026-10",
-    type: "income",
-    category: "เงินเดือน",
-    name: "เงินเดือน",
-    amount: 62000,
-    channel: "SCB",
-    nature: "คงที่",
-    status: "ยืนยันแล้ว",
-    note: "เงินเดือนออกปลายเดือน จัดสรรเป็นงบเดือนถัดไป",
-    evidenceName: "สลิปเงินเดือน",
-  },
-  {
-    id: "TX-0002",
-    date: "2026-09-30",
-    budgetMonth: "2026-10",
-    type: "expense",
-    category: "หนี้สิน/ผ่อนชำระ",
-    name: "ชำระคืน SPayLater",
-    amount: 2212.67,
-    channel: "Shopee",
-    nature: "ประจำยอดเปลี่ยน",
-    status: "ยืนยันแล้ว",
-    note: "ชำระหลังเงินเดือน จัดเป็นภาระของเดือนตุลาคม",
-    evidenceName: "IMG_7967.png",
-  },
-  {
-    id: "TX-0003",
-    date: "2026-09-30",
-    budgetMonth: "2026-10",
-    type: "expense",
-    category: "บัตรเครดิต",
-    name: "ชำระค่าบัตรเครดิต Card X",
-    amount: 14491.34,
-    channel: "SCB",
-    nature: "ประจำยอดเปลี่ยน",
-    status: "ยืนยันแล้ว",
-    note: "จ่ายผ่าน SCB ไปยัง Card X",
-    evidenceName: "IMG_7975.jpeg",
-  },
-  {
-    id: "TX-0004",
-    date: "2026-09-30",
-    budgetMonth: "2026-10",
-    type: "expense",
-    category: "หนี้สิน/ผ่อนชำระ",
-    name: "ชำระบัตร Speedy Cash (Card X)",
-    amount: 2095.41,
-    channel: "SCB",
-    nature: "ประจำยอดเปลี่ยน",
-    status: "ยืนยันแล้ว",
-    note: "จ่ายก่อนกำหนดชำระของเดือนตุลาคม",
-    evidenceName: "IMG_7976.jpeg",
-  },
-  {
-    id: "TX-0005",
-    date: "2026-09-30",
-    budgetMonth: "2026-10",
-    type: "expense",
-    category: "บัตรเครดิต",
-    name: "ชำระบัตรเครดิตกสิกรไทย",
-    amount: 4849.05,
-    channel: "SCB",
-    nature: "ประจำยอดเปลี่ยน",
-    status: "ยืนยันแล้ว",
-    note: "รายการปลายเดือน จัดเป็นงบเดือนตุลาคม",
-    evidenceName: "IMG_7978.jpeg",
-  },
-  {
-    id: "TX-0006",
-    date: "2026-09-30",
-    budgetMonth: "2026-10",
-    type: "expense",
-    category: "หนี้สิน/ผ่อนชำระ",
-    name: "ชำระบัตรกดเงินสด UOB Cash Plus",
-    amount: 1500,
-    channel: "SCB",
-    nature: "ประจำยอดเปลี่ยน",
-    status: "ยืนยันแล้ว",
-    note: "ชำระหลังได้รับเงินเดือน",
-    evidenceName: "IMG_7979.jpeg",
-  },
-];
-
-export const demoReceiptMap = [
-  {
-    match: "7967",
-    name: "ชำระคืน SPayLater",
-    amount: 2212.67,
-    category: "หนี้สิน/ผ่อนชำระ",
-    channel: "Shopee",
-  },
-  {
-    match: "7975",
-    name: "ชำระค่าบัตรเครดิต Card X",
-    amount: 14491.34,
-    category: "บัตรเครดิต",
-    channel: "SCB",
-  },
-  {
-    match: "7976",
-    name: "ชำระบัตร Speedy Cash (Card X)",
-    amount: 2095.41,
-    category: "หนี้สิน/ผ่อนชำระ",
-    channel: "SCB",
-  },
-  {
-    match: "7978",
-    name: "ชำระบัตรเครดิตกสิกรไทย",
-    amount: 4849.05,
-    category: "บัตรเครดิต",
-    channel: "SCB",
-  },
-  {
-    match: "7979",
-    name: "ชำระบัตรกดเงินสด UOB Cash Plus",
-    amount: 1500,
-    category: "หนี้สิน/ผ่อนชำระ",
-    channel: "SCB",
-  },
-];
+export const initialTransactions = [];
+export const demoReceiptMap = [];
 
 export const debtCategories = ["บัตรเครดิต", "หนี้สิน/ผ่อนชำระ"];
 
@@ -176,11 +85,17 @@ export function formatDate(value) {
 }
 
 export function getMonthLabel(value) {
-  return monthOptions.find((month) => month.value === value)?.label || value;
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(value || "")) return value || "";
+  const [year, month] = value.split("-").map(Number);
+  return new Intl.DateTimeFormat("th-TH", {
+    month: "long",
+    year: "numeric",
+    timeZone: BANGKOK_TIME_ZONE,
+  }).format(new Date(Date.UTC(year, month - 1, 1, 12)));
 }
 
 export function deriveBudgetMonth(date, category) {
-  if (!date) return "2026-10";
+  if (!date) return getCurrentMonthValue();
   const [year, month, day] = date.split("-").map(Number);
   const startsNextBudgetMonth = category === "เงินเดือน" || debtCategories.includes(category);
   if (!startsNextBudgetMonth || day < 25) return `${year}-${String(month).padStart(2, "0")}`;
@@ -215,7 +130,7 @@ export function getSummary(transactions, selectedMonth) {
 
 export function createDraftFromFile(file) {
   const detected = demoReceiptMap.find((item) => file.name.includes(item.match));
-  const today = "2026-09-30";
+  const today = getTodayDate();
   const category = detected?.category || "อื่นๆ";
 
   return {
