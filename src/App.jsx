@@ -23,6 +23,7 @@ import {
   signIn,
   signOut,
 } from "./api";
+import { readReceipt } from "./receipt-ocr";
 
 const navItems = [
   { key: "overview", label: "ภาพรวม", icon: "grid" },
@@ -38,6 +39,14 @@ function loadSavedTransactions() {
   } catch {
     return initialTransactions;
   }
+}
+
+function ocrProgressLabel(status) {
+  if (status === "loading tesseract core") return "กำลังเตรียมระบบอ่านข้อความ";
+  if (status === "loading language traineddata") return "กำลังโหลดชุดภาษาไทยและอังกฤษ";
+  if (status === "initializing api") return "กำลังเริ่มระบบ OCR";
+  if (status === "recognizing text") return "กำลังอ่านข้อความจากรูป";
+  return "กำลังเตรียมอ่านสลิป";
 }
 
 function App() {
@@ -194,7 +203,50 @@ function App() {
       return;
     }
     const file = selectedFile.type === mimeType ? selectedFile : new File([selectedFile], selectedFile.name, { type: mimeType, lastModified: selectedFile.lastModified });
-    setDraft({ ...createDraftFromFile(file), sourceFile: file });
+    const nextDraft = {
+      ...createDraftFromFile(file),
+      sourceFile: file,
+      ocrStatus: file.type.startsWith("image/") ? "reading" : "unsupported",
+      ocrProgress: 0,
+      ocrPhase: "",
+      ocrText: "",
+      ocrFieldsRead: 0,
+      ocrConfidence: null,
+    };
+    setDraft(nextDraft);
+    if (!file.type.startsWith("image/")) return;
+
+    readReceipt(file, ({ status, progress }) => {
+      setDraft((current) => current?.sourceFile === file
+        ? { ...current, ocrProgress: progress, ocrPhase: status }
+        : current);
+    }).then((result) => {
+      setDraft((current) => {
+        if (current?.sourceFile !== file) return current;
+        const date = result.date || current.date;
+        const category = result.category || current.category;
+        const fieldsRead = result.fieldsRead || 0;
+        return {
+          ...current,
+          date,
+          budgetMonth: deriveBudgetMonth(date, category),
+          name: result.name || current.name,
+          amount: result.amount ? String(result.amount) : current.amount,
+          category,
+          channel: result.channel || current.channel,
+          ocrStatus: result.text ? (fieldsRead ? "done" : "unrecognized") : "empty",
+          ocrProgress: 100,
+          ocrPhase: "recognizing text",
+          ocrText: result.text,
+          ocrFieldsRead: fieldsRead,
+          ocrConfidence: result.confidence,
+        };
+      });
+    }).catch(() => {
+      setDraft((current) => current?.sourceFile === file
+        ? { ...current, ocrStatus: "failed", ocrPhase: "", ocrProgress: 0 }
+        : current);
+    });
   }
 
   function updateDraft(field, value) {
@@ -213,6 +265,10 @@ function App() {
   }
 
   async function confirmDraft() {
+    if (draft?.ocrStatus === "reading") {
+      setToast("รอให้ระบบอ่านข้อความจากสลิปก่อน แล้วตรวจข้อมูลอีกครั้งครับ");
+      return;
+    }
     const amount = Number(String(draft?.amount ?? "").replaceAll(",", ""));
     if (!draft || !Number.isFinite(amount) || amount <= 0 || !String(draft.name || "").trim()) {
       setToast("กรุณาตรวจสอบจำนวนเงินก่อนยืนยันรายการ");
@@ -648,7 +704,7 @@ function CoachView({ summary, selectedMonth }) {
     <div className="page-stack">
       <section className="page-intro"><div><h2>คำแนะนำ AI</h2><p>มุมมองเชิงปฏิบัติจากรายการของเดือน {getMonthLabel(selectedMonth)}</p></div><span className="beta-label"><Icon name="sparkles" size={15} />AI Coach</span></section>
       <section className="coach-hero"><div className="coach-orb"><Icon name="sparkles" size={28} /></div><div><span className="coach-kicker">สรุปสถานะการเงิน</span><h3>{level}</h3><p>ระบบเห็นว่าภาระบัตรเครดิตและหนี้สินอยู่ที่ {ratio}% ของรายรับในเดือนนี้</p></div><div className="coach-number"><strong>{ratio}%</strong><span>ภาระต่อรายรับ</span></div></section>
-      <section className="coach-grid"><AdviceCard icon="wallet" title="รักษาเงินคงเหลือ" tone="green" text={`หลังหักภาระแล้ว คงเหลือ ฿ ${formatNumber(summary.balance)} ควรกันส่วนหนึ่งเป็นเงินสำรองก่อนเพิ่มค่าใช้จ่ายใหม่`} /><AdviceCard icon="card" title="รวมวันครบกำหนด" tone="blue" text="แนะนำให้บันทึกวันครบกำหนดของแต่ละเจ้าหนี้ เพื่อให้ระบบเตือนล่วงหน้าและเห็นยอดที่ต้องเตรียมได้แม่นขึ้น" /><AdviceCard icon="sparkles" title="สิ่งที่จะฉลาดขึ้น" tone="amber" text="เมื่อเชื่อม OCR และ AI จริง ระบบจะอ่านข้อความจากสลิป เสนอหมวดหมู่ และให้ยืนยันก่อนบันทึกอัตโนมัติ" /></section>
+      <section className="coach-grid"><AdviceCard icon="wallet" title="รักษาเงินคงเหลือ" tone="green" text={`หลังหักภาระแล้ว คงเหลือ ฿ ${formatNumber(summary.balance)} ควรกันส่วนหนึ่งเป็นเงินสำรองก่อนเพิ่มค่าใช้จ่ายใหม่`} /><AdviceCard icon="card" title="รวมวันครบกำหนด" tone="blue" text="แนะนำให้บันทึกวันครบกำหนดของแต่ละเจ้าหนี้ เพื่อให้ระบบเตือนล่วงหน้าและเห็นยอดที่ต้องเตรียมได้แม่นขึ้น" /><AdviceCard icon="sparkles" title="อ่านข้อความจากสลิป" tone="amber" text="OCR อ่านข้อความจากรูปบนอุปกรณ์และเติมข้อมูลเบื้องต้นให้ตรวจสอบก่อนบันทึก ส่วนการวิเคราะห์ด้วย AI ยังไม่ได้เชื่อมต่อ" /></section>
       <section className="panel rules-panel"><div className="panel-header"><div><h3>กติกาที่ระบบใช้ตอนนี้</h3><span>ทำให้การจัดเดือนงบประมาณสอดคล้องกับวิธีใช้เงินจริง</span></div></div><div className="rule-list"><RuleItem title="เงินเดือนปลายเดือน" detail="รายรับวันที่ 25 เป็นต้นไป สามารถจัดสรรเป็นงบเดือนถัดไป" /><RuleItem title="ชำระหนี้หลังเงินเดือน" detail="รายการบัตรเครดิตและหนี้สินวันที่ 25 เป็นต้นไป จะเสนอเดือนถัดไป" /><RuleItem title="ตรวจสอบก่อนบันทึก" detail="รูปใหม่จะอยู่สถานะรอตรวจสอบ จนกว่าจะยืนยันรายการ" /></div></section>
     </div>
   );
@@ -664,23 +720,39 @@ function RuleItem({ title, detail }) {
 
 function ReviewModal({ draft, monthChoices, saving, onChange, onClose, onConfirm }) {
   const isExisting = draft.isExisting;
+  const isOcrProcessing = draft.ocrStatus === "reading";
+  const fieldsDisabled = isExisting || isOcrProcessing;
+  const reviewMessage = draft.isDemoDetected
+    ? "ระบบจำลองตรวจพบข้อมูลจากรูปตัวอย่าง โปรดตรวจสอบความถูกต้องก่อนยืนยัน"
+    : draft.ocrStatus === "reading"
+      ? `${ocrProgressLabel(draft.ocrPhase)}${draft.ocrProgress > 0 ? ` ${draft.ocrProgress}%` : "…"} ประมวลผลบนอุปกรณ์นี้ รูปจะส่งไป Drive เมื่อกดยืนยันเท่านั้น`
+      : draft.ocrStatus === "done"
+        ? `OCR อ่านข้อมูลได้ ${draft.ocrFieldsRead} ช่อง${draft.ocrConfidence != null ? ` (ความเชื่อมั่นโดยรวม ${draft.ocrConfidence}%)` : ""} โปรดตรวจสอบก่อนบันทึก รูปจะส่งไป Drive เมื่อกดยืนยันเท่านั้น`
+        : draft.ocrStatus === "empty" || draft.ocrStatus === "unrecognized"
+          ? "อ่านข้อความได้ไม่พอสำหรับเติมข้อมูล ช่องที่อ่านไม่ได้กรุณากรอกเอง แล้วตรวจสอบก่อนบันทึก"
+          : draft.ocrStatus === "unsupported"
+            ? "OCR รองรับเฉพาะไฟล์รูปภาพในตอนนี้ ไฟล์ PDF กรุณากรอกข้อมูลเอง"
+            : draft.ocrStatus === "failed"
+              ? "OCR อ่านรูปนี้ไม่สำเร็จ ตรวจการเชื่อมต่ออินเทอร์เน็ตแล้วกรอกข้อมูลเองได้เลย"
+              : "เลือกรูปสลิปเพื่อให้ OCR อ่านข้อมูลเบื้องต้น";
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <section className="review-modal" role="dialog" aria-modal="true" aria-labelledby="review-title">
         <div className="modal-header"><div><span className="modal-kicker">{isExisting ? "รายละเอียดรายการ" : "ตรวจสอบข้อมูลจากสลิป"}</span><h2 id="review-title">{isExisting ? draft.name : "รายการใหม่จากหลักฐาน"}</h2></div><button className="icon-button" aria-label="ปิดหน้าต่าง" onClick={onClose}><Icon name="close" size={21} /></button></div>
         <div className="review-body">
-          <div className="receipt-preview">{draft.previewUrl ? <img src={draft.previewUrl} alt="ตัวอย่างหลักฐานที่อัปโหลด" /> : <div className="preview-empty"><Icon name="image" size={27} /><span>{draft.fileName || "ไม่มีภาพตัวอย่าง"}</span></div>}{draft.evidenceUrl && <a className="evidence-link" href={draft.evidenceUrl} target="_blank" rel="noreferrer">เปิดหลักฐานใน Google Drive</a>}<span className="preview-status"><Icon name={draft.isDemoDetected ? "check" : "info"} size={13} />{draft.isDemoDetected ? "ตรวจข้อมูลเบื้องต้นแล้ว" : "กรุณากรอกข้อมูลจากหลักฐาน"}</span></div>
+          <div className="receipt-preview">{draft.previewUrl ? <img src={draft.previewUrl} alt="ตัวอย่างหลักฐานที่อัปโหลด" /> : <div className="preview-empty"><Icon name="image" size={27} /><span>{draft.fileName || "ไม่มีภาพตัวอย่าง"}</span></div>}{draft.evidenceUrl && <a className="evidence-link" href={draft.evidenceUrl} target="_blank" rel="noreferrer">เปิดหลักฐานใน Google Drive</a>}<span className="preview-status" aria-live="polite"><Icon name={draft.ocrStatus === "done" ? "check" : "info"} size={13} />{isOcrProcessing ? `${ocrProgressLabel(draft.ocrPhase)}${draft.ocrProgress > 0 ? ` ${draft.ocrProgress}%` : "…"}` : draft.ocrStatus === "done" ? "อ่านข้อความแล้ว · กรุณาตรวจสอบ" : draft.ocrStatus === "unsupported" ? "ไฟล์นี้ยังอ่านอัตโนมัติไม่ได้" : draft.ocrStatus === "failed" || draft.ocrStatus === "empty" || draft.ocrStatus === "unrecognized" ? "กรุณาตรวจหรือกรอกข้อมูลเอง" : "รอตรวจสอบข้อมูล"}</span></div>
           <div className="review-form">
-            {!isExisting && <div className="review-note"><Icon name="info" size={16} /><span>{draft.isDemoDetected ? "ระบบจำลองตรวจพบข้อมูลจากรูปตัวอย่าง โปรดตรวจสอบความถูกต้องก่อนยืนยัน" : "ยังไม่ได้เชื่อม OCR/AI ระบบจะส่งไฟล์ไป Drive เมื่อยืนยันรายการในโหมด Google"}</span></div>}
-            <label>วันที่เกิดรายการ<input type="date" value={draft.date || ""} onChange={(event) => onChange("date", event.target.value)} disabled={isExisting} /></label>
-            <label>รายการ<input type="text" value={draft.name || ""} onChange={(event) => onChange("name", event.target.value)} disabled={isExisting} /></label>
-            <label>จำนวนเงิน (บาท)<input type="number" min="0" step="0.01" value={draft.amount ?? ""} onChange={(event) => onChange("amount", event.target.value)} disabled={isExisting} /></label>
-            <div className="form-two-col"><label>หมวดหมู่<select value={draft.category || "อื่นๆ"} onChange={(event) => onChange("category", event.target.value)} disabled={isExisting}>{categoryOptions.map((item) => <option key={item}>{item}</option>)}</select></label><label>ช่องทางจ่าย<select value={draft.channel || "อื่นๆ"} onChange={(event) => onChange("channel", event.target.value)} disabled={isExisting}>{channelOptions.map((item) => <option key={item}>{item}</option>)}</select></label></div>
-            <label>เดือนงบประมาณ<select value={draft.budgetMonth || getCurrentMonthValue()} onChange={(event) => onChange("budgetMonth", event.target.value)} disabled={isExisting}>{monthChoices.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
-            <label>หมายเหตุ<textarea rows="2" value={draft.note || ""} onChange={(event) => onChange("note", event.target.value)} disabled={isExisting} /></label>
+            {!isExisting && <div className={`review-note review-note-${draft.ocrStatus || "idle"}`} data-state={draft.ocrStatus || "idle"} role="status" aria-live="polite"><Icon name={draft.ocrStatus === "done" ? "check" : "info"} size={16} /><span>{reviewMessage}{isOcrProcessing && <span className="ocr-progress" role="progressbar" aria-label="ความคืบหน้าการอ่านข้อความ" aria-valuemin="0" aria-valuemax="100" aria-valuenow={draft.ocrProgress}><span style={{ width: `${draft.ocrProgress}%` }} /></span>}</span></div>}
+            <label>วันที่เกิดรายการ<input type="date" value={draft.date || ""} onChange={(event) => onChange("date", event.target.value)} disabled={fieldsDisabled} /></label>
+            <label>รายการ<input type="text" value={draft.name || ""} onChange={(event) => onChange("name", event.target.value)} disabled={fieldsDisabled} /></label>
+            <label>จำนวนเงิน (บาท)<input type="number" min="0" step="0.01" value={draft.amount ?? ""} onChange={(event) => onChange("amount", event.target.value)} disabled={fieldsDisabled} /></label>
+            <div className="form-two-col"><label>หมวดหมู่<select value={draft.category || "อื่นๆ"} onChange={(event) => onChange("category", event.target.value)} disabled={fieldsDisabled}>{categoryOptions.map((item) => <option key={item}>{item}</option>)}</select></label><label>ช่องทางจ่าย<select value={draft.channel || "อื่นๆ"} onChange={(event) => onChange("channel", event.target.value)} disabled={fieldsDisabled}>{channelOptions.map((item) => <option key={item}>{item}</option>)}</select></label></div>
+            <label>เดือนงบประมาณ<select value={draft.budgetMonth || getCurrentMonthValue()} onChange={(event) => onChange("budgetMonth", event.target.value)} disabled={fieldsDisabled}>{monthChoices.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
+            <label>หมายเหตุ<textarea rows="2" value={draft.note || ""} onChange={(event) => onChange("note", event.target.value)} disabled={fieldsDisabled} /></label>
+            {draft.ocrText && <details className="ocr-text-details"><summary>ดูข้อความที่ OCR อ่านได้</summary><pre>{draft.ocrText}</pre></details>}
           </div>
         </div>
-        <div className="modal-footer"><button className="secondary-button" onClick={onClose} disabled={saving}>{isExisting ? "ปิด" : "ยกเลิก"}</button>{!isExisting && <button className="primary-button" onClick={onConfirm} disabled={saving}>{saving ? "กำลังบันทึก…" : <><Icon name="check" size={17} />ยืนยันรายการ</>}</button>}</div>
+        <div className="modal-footer"><button className="secondary-button" onClick={onClose} disabled={saving}>{isExisting ? "ปิด" : "ยกเลิก"}</button>{!isExisting && <button className="primary-button" onClick={onConfirm} disabled={saving || isOcrProcessing}>{saving ? "กำลังบันทึก…" : isOcrProcessing ? "กำลังอ่านสลิป…" : <><Icon name="check" size={17} />ยืนยันรายการ</>}</button>}</div>
       </section>
     </div>
   );

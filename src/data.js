@@ -140,12 +140,10 @@ export function createDraftFromFile(file) {
     category,
     name: detected?.name || "รายการจากรูปใหม่",
     amount: detected?.amount ?? "",
-    channel: detected?.channel || "SCB",
+    channel: detected?.channel || "อื่นๆ",
     nature: "ครั้งเดียว",
     status: "รอตรวจสอบ",
-    note: detected
-      ? "ตรวจพบข้อมูลจากรูปตัวอย่าง โปรดตรวจสอบก่อนยืนยัน"
-      : "ยังไม่ได้เชื่อม OCR/AI จริง โปรดกรอกข้อมูลจากหลักฐานก่อนยืนยัน",
+    note: detected ? "ตรวจพบข้อมูลจากรูปตัวอย่าง โปรดตรวจสอบก่อนยืนยัน" : "",
     fileName: file.name,
     fileType: file.type,
     previewUrl: file.type.startsWith("image/") ? URL.createObjectURL(file) : "",

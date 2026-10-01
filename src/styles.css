@@ -241,6 +241,16 @@ button:focus-visible, [role="button"]:focus-visible, input:focus-visible, select
 .form-two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .review-note { display: flex; gap: 7px; padding: 9px 10px; border-radius: 8px; color: #806121; background: #fff8e9; font-size: 10px; line-height: 1.5; }
 .review-note .icon { flex: 0 0 auto; margin-top: 1px; }
+.review-note > span { min-width: 0; }
+.review-note-reading { color: #315f9b; background: #eef6ff; }
+.review-note-done { color: #087443; background: #effcf5; }
+.review-note-empty, .review-note-unrecognized, .review-note-failed { color: #806121; background: #fff8e9; }
+.review-note-unsupported { color: #59677a; background: #f3f6fa; }
+.ocr-progress { display: block; height: 4px; margin-top: 7px; overflow: hidden; border-radius: 4px; background: #d9e8fb; }
+.ocr-progress > span { display: block; height: 100%; border-radius: inherit; background: var(--blue); transition: width .2s ease; }
+.ocr-text-details { padding-top: 2px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; }
+.ocr-text-details summary { padding: 8px 0; color: var(--blue-deep); cursor: pointer; font-weight: 600; }
+.ocr-text-details pre { max-height: 160px; margin: 0 0 8px; overflow: auto; color: #475467; white-space: pre-wrap; overflow-wrap: anywhere; font-family: inherit; font-size: 11px; line-height: 1.6; }
 .modal-footer { display: flex; justify-content: flex-end; gap: 9px; padding: 15px 24px 21px; border-top: 1px solid var(--line); }
 .toast { position: fixed; right: 23px; bottom: 24px; z-index: 50; display: flex; align-items: center; gap: 8px; max-width: min(420px, calc(100vw - 40px)); padding: 12px 15px; border: 1px solid #b8e9ce; border-radius: 11px; color: #087443; background: #effcf5; box-shadow: 0 14px 32px rgba(16,24,40,.13); font-size: 12px; font-weight: 600; }
 .mobile-nav { display: none; }
