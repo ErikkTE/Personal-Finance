@@ -412,7 +412,7 @@ function App() {
         }}
       />
       {draft && (
-        <ReviewModal draft={draft} monthChoices={monthChoices} saving={saving} onChange={updateDraft} onClose={closeDraft} onConfirm={confirmDraft} />
+        <ReviewModal draft={draft} monthChoices={monthChoices} saving={saving} storageMode={runtime.mode} onChange={updateDraft} onClose={closeDraft} onConfirm={confirmDraft} />
       )}
       {showSettings && <ConnectionDialog connection={connection} onClose={() => setShowSettings(false)} onLogout={handleLogout} onRetry={retryGoogleConnection} />}
       {toast && <div className="toast"><Icon name="check" size={17} />{toast}</div>}
@@ -718,16 +718,19 @@ function RuleItem({ title, detail }) {
   return <div className="rule-item"><span className="rule-check"><Icon name="check" size={15} /></span><span><strong>{title}</strong><small>{detail}</small></span></div>;
 }
 
-function ReviewModal({ draft, monthChoices, saving, onChange, onClose, onConfirm }) {
+function ReviewModal({ draft, monthChoices, saving, storageMode, onChange, onClose, onConfirm }) {
   const isExisting = draft.isExisting;
   const isOcrProcessing = draft.ocrStatus === "reading";
   const fieldsDisabled = isExisting || isOcrProcessing;
+  const imageSaveMessage = storageMode === "google"
+    ? "รูปจะส่งไป Drive เมื่อกดยืนยันเท่านั้น"
+    : "โหมดทดลองจะบันทึกเฉพาะข้อมูลในอุปกรณ์และไม่ส่งภาพไป Drive";
   const reviewMessage = draft.isDemoDetected
     ? "ระบบจำลองตรวจพบข้อมูลจากรูปตัวอย่าง โปรดตรวจสอบความถูกต้องก่อนยืนยัน"
     : draft.ocrStatus === "reading"
-      ? `${ocrProgressLabel(draft.ocrPhase)}${draft.ocrProgress > 0 ? ` ${draft.ocrProgress}%` : "…"} ประมวลผลบนอุปกรณ์นี้ รูปจะส่งไป Drive เมื่อกดยืนยันเท่านั้น`
+      ? `${ocrProgressLabel(draft.ocrPhase)}${draft.ocrProgress > 0 ? ` ${draft.ocrProgress}%` : "…"} ประมวลผลบนอุปกรณ์นี้ ${imageSaveMessage}`
       : draft.ocrStatus === "done"
-        ? `OCR อ่านข้อมูลได้ ${draft.ocrFieldsRead} ช่อง${draft.ocrConfidence != null ? ` (ความเชื่อมั่นโดยรวม ${draft.ocrConfidence}%)` : ""} โปรดตรวจสอบก่อนบันทึก รูปจะส่งไป Drive เมื่อกดยืนยันเท่านั้น`
+        ? `OCR อ่านข้อมูลได้ ${draft.ocrFieldsRead} ช่อง${draft.ocrConfidence != null ? ` (คะแนนอ่านข้อความ ${draft.ocrConfidence}%)` : ""} โปรดตรวจสอบก่อนบันทึก ${imageSaveMessage}`
         : draft.ocrStatus === "empty" || draft.ocrStatus === "unrecognized"
           ? "อ่านข้อความได้ไม่พอสำหรับเติมข้อมูล ช่องที่อ่านไม่ได้กรุณากรอกเอง แล้วตรวจสอบก่อนบันทึก"
           : draft.ocrStatus === "unsupported"
