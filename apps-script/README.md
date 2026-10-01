@@ -28,6 +28,9 @@ Do not place the shared secret in browser code, a `VITE_*` variable, a public do
 ## Supported actions
 
 - `health`: validates access to the configured spreadsheet, `Transactions` tab, expected headers, and Drive folder.
-- `listTransactions`: reads visible transaction rows.
+- `listTransactions`: reads transaction rows, including hidden ones; the PWA keeps hidden rows out of its normal lists.
 - `saveTransaction`: uploads optional evidence, appends a transaction row, and avoids duplicate IDs.
-- `softDeleteTransaction`: changes the row status to `ลบแล้ว`; it does not remove the row or the evidence file.
+- `softDeleteTransaction`: stores the previous status in an additional `สถานะก่อนซ่อน` column and changes the row status to `ลบแล้ว`; it does not remove the row or the evidence file.
+- `restoreMonthTransactions`: restores every hidden row in the selected budget month and returns the refreshed transaction list.
+
+Rows hidden before this restore feature was added do not have a saved previous status, so restoring those rows sets their status to `ยืนยันแล้ว`.

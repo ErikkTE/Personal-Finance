@@ -87,3 +87,14 @@ export async function removeTransaction(id) {
     body: JSON.stringify({ id }),
   });
 }
+
+export async function restoreHiddenTransactions(budgetMonth) {
+  const result = await requestJson("/api/transactions", {
+    method: "PATCH",
+    body: JSON.stringify({ budgetMonth }),
+  });
+  if (!Array.isArray(result?.transactions) || !Number.isInteger(result?.restoredCount)) {
+    throw new Error("เซิร์ฟเวอร์ยืนยันการคืนรายการไม่สำเร็จ");
+  }
+  return result;
+}

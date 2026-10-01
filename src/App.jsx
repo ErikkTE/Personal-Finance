@@ -18,6 +18,7 @@ import {
   getGoogleStatus,
   listTransactions,
   removeTransaction as removeGoogleTransaction,
+  restoreHiddenTransactions as restoreGoogleHiddenTransactions,
   saveTransaction as saveGoogleTransaction,
   signIn,
   signOut,
@@ -43,6 +44,7 @@ function App() {
   const [activeView, setActiveView] = useState("overview");
   const [selectedMonth, setSelectedMonth] = useState(getCurrentMonthValue);
   const [transactions, setTransactions] = useState([]);
+  const [hiddenTransactions, setHiddenTransactions] = useState([]);
   const [draft, setDraft] = useState(null);
   const [toast, setToast] = useState("");
   const [saving, setSaving] = useState(false);
@@ -95,6 +97,7 @@ function App() {
 
     function enterDemoMode() {
       setTransactions(loadSavedTransactions());
+      setHiddenTransactions([]);
       setConnection({ mode: "local", state: "demo" });
       setRuntime({ status: "ready", mode: "local" });
     }
@@ -129,6 +132,7 @@ function App() {
     setRuntime({ status: "syncing", mode: "google" });
     const [health, remoteTransactions] = await Promise.all([getGoogleStatus(), listTransactions()]);
     setTransactions(remoteTransactions.filter((item) => item.status !== "ลบแล้ว"));
+    setHiddenTransactions(remoteTransactions.filter((item) => item.status === "ลบแล้ว"));
     setConnection({ mode: "google", state: "connected", ...health });
     setRuntime({ status: "ready", mode: "google" });
   }
@@ -153,6 +157,7 @@ function App() {
   async function handleLogout() {
     try { await signOut(); } catch { /* The local session still returns to the sign-in screen. */ }
     setTransactions([]);
+    setHiddenTransactions([]);
     setShowSettings(false);
     setConnection({ mode: "google", state: "locked" });
     setRuntime({ status: "login", mode: "google" });
@@ -250,10 +255,36 @@ function App() {
   async function removeTransaction(id) {
     try {
       if (runtime.mode === "google") await removeGoogleTransaction(id);
+      const hiddenItem = transactions.find((item) => item.id === id);
       setTransactions((current) => current.filter((item) => item.id !== id));
+      if (runtime.mode === "google" && hiddenItem) {
+        setHiddenTransactions((current) => [
+          { ...hiddenItem, status: "ลบแล้ว" },
+          ...current.filter((item) => item.id !== id),
+        ]);
+      }
       setToast(runtime.mode === "google" ? "ซ่อนรายการจากแอปแล้ว โดยเก็บแถวไว้ในชีต" : "ลบรายการทดลองออกจากเครื่องแล้ว");
     } catch (error) {
       setToast(error.message || "ลบรายการไม่สำเร็จ");
+    }
+  }
+
+  async function restoreHiddenForMonth(budgetMonth) {
+    if (runtime.mode !== "google") {
+      setToast("การคืนรายการที่ซ่อนใช้ได้เมื่อเชื่อมต่อ Google Sheets");
+      return;
+    }
+
+    try {
+      const result = await restoreGoogleHiddenTransactions(budgetMonth);
+      const refreshedTransactions = result.transactions || [];
+      setTransactions(refreshedTransactions.filter((item) => item.status !== "ลบแล้ว"));
+      setHiddenTransactions(refreshedTransactions.filter((item) => item.status === "ลบแล้ว"));
+      setToast(result.restoredCount
+        ? `คืนรายการที่ซ่อน ${result.restoredCount} รายการแล้ว`
+        : "เดือนนี้ไม่มีรายการที่ซ่อนอยู่");
+    } catch (error) {
+      setToast(error.message || "คืนรายการที่ซ่อนไม่สำเร็จ");
     }
   }
 
@@ -306,6 +337,8 @@ function App() {
               }}
               connection={connection}
               onRemove={removeTransaction}
+              hiddenTransactions={hiddenTransactions.filter((item) => item.budgetMonth === selectedMonth)}
+              onRestoreMonth={restoreHiddenForMonth}
             />
           )}
           {activeView === "coach" && <CoachView summary={summary} selectedMonth={selectedMonth} />}
@@ -450,7 +483,7 @@ function Topbar({ activeView, selectedMonth, monthChoices, connection, onMonthCh
 }
 
 function Overview({ summary, transactions, selectedMonth, onUpload, onNavigate, onSelectTransaction }) {
-  const latest = summary.monthTransactions.slice(0, 6);
+  const monthTransactions = summary.monthTransactions;
   return (
     <div className="page-stack">
       <section className="page-intro">
@@ -476,8 +509,8 @@ function Overview({ summary, transactions, selectedMonth, onUpload, onNavigate, 
 
       <section className="dashboard-lower">
         <div className="panel transaction-panel">
-          <div className="panel-header"><div><h3>รายการล่าสุด</h3><span>{latest.length} รายการในงบเดือนนี้</span></div><button className="text-button" onClick={() => onNavigate("history")}>ดูทั้งหมด <Icon name="chevronRight" size={16} /></button></div>
-          <TransactionTable transactions={latest} onSelect={onSelectTransaction} />
+          <div className="panel-header"><div><h3>รายการทั้งหมดในเดือน {getMonthLabel(selectedMonth)}</h3><span>{monthTransactions.length} รายการ</span></div><button className="text-button" onClick={() => onNavigate("history")}>ค้นหาและกรอง <Icon name="chevronRight" size={16} /></button></div>
+          <TransactionTable transactions={monthTransactions} onSelect={onSelectTransaction} />
         </div>
         <AiSummary summary={summary} onOpen={() => onNavigate("coach")} />
       </section>
@@ -560,9 +593,10 @@ function ProcessStep({ number, title, detail, active }) {
   return <div className={`process-step ${active ? "active" : ""}`}><span className="step-number">{number}</span><span><strong>{title}</strong><small>{detail}</small></span>{active && <span className="step-current">ตอนนี้</span>}</div>;
 }
 
-function HistoryView({ transactions, selectedMonth, connection, onSelectTransaction, onRemove }) {
+function HistoryView({ transactions, selectedMonth, connection, onSelectTransaction, onRemove, hiddenTransactions, onRestoreMonth }) {
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("ทั้งหมด");
+  const [restoring, setRestoring] = useState(false);
   const categories = ["ทั้งหมด", ...categoryOptions];
   const filtered = transactions.filter((item) => {
     const matchesMonth = item.budgetMonth === selectedMonth;
@@ -570,11 +604,38 @@ function HistoryView({ transactions, selectedMonth, connection, onSelectTransact
     const haystack = `${item.name} ${item.channel} ${item.category}`.toLowerCase();
     return matchesMonth && matchesCategory && haystack.includes(query.toLowerCase());
   });
+
+  async function restoreAllHidden() {
+    if (!hiddenTransactions.length || restoring) return;
+    const shouldRestore = window.confirm(
+      `คืนรายการที่ซ่อนทั้งหมด ${hiddenTransactions.length} รายการของเดือน ${getMonthLabel(selectedMonth)} กลับมาแสดงในแอปหรือไม่? รายการเหล่านี้จะกลับไปรวมในยอดสรุปของเดือนนี้ด้วย`
+    );
+    if (!shouldRestore) return;
+
+    setRestoring(true);
+    try {
+      await onRestoreMonth(selectedMonth);
+    } finally {
+      setRestoring(false);
+    }
+  }
+
   return (
     <div className="page-stack">
       <section className="page-intro"><div><h2>ประวัติรายการ</h2><p>ตรวจสอบรายการทั้งหมดที่ถูกจัดเข้าเดือน {getMonthLabel(selectedMonth)}</p></div><button className="secondary-button"><Icon name="download" size={17} />ส่งออกภายหลัง</button></section>
       <section className="filter-bar panel"><div className="search-field"><Icon name="search" size={18} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="ค้นหารายการหรือช่องทางจ่าย" /></div><div className="select-field"><Icon name="filter" size={17} /><select value={category} onChange={(event) => setCategory(event.target.value)} aria-label="กรองตามหมวดหมู่">{categories.map((item) => <option key={item}>{item}</option>)}</select></div></section>
-      <section className="panel history-panel"><div className="panel-header"><div><h3>รายการในเดือน {getMonthLabel(selectedMonth)}</h3><span>{filtered.length} จาก {transactions.filter((item) => item.budgetMonth === selectedMonth).length} รายการ</span></div></div><TransactionTable transactions={filtered} onSelect={onSelectTransaction} /></section>
+      <section className="panel history-panel">
+        <div className="panel-header history-panel-header">
+          <div><h3>รายการในเดือน {getMonthLabel(selectedMonth)}</h3><span>{filtered.length} จาก {transactions.filter((item) => item.budgetMonth === selectedMonth).length} รายการ</span></div>
+          {connection.mode === "google" && (
+            <button className="secondary-button restore-button" type="button" disabled={!hiddenTransactions.length || restoring} onClick={restoreAllHidden}>
+              <Icon name="restore" size={16} />
+              {restoring ? "กำลังคืนรายการ…" : `คืนรายการที่ซ่อนทั้งหมด (${hiddenTransactions.length})`}
+            </button>
+          )}
+        </div>
+        <TransactionTable transactions={filtered} onSelect={onSelectTransaction} />
+      </section>
       <div className="history-footnote"><Icon name="info" size={16} /><span>{connection.mode === "google" ? "ข้อมูลนี้โหลดจาก Google Sheets รายการที่ซ่อนจากแอปยังคงอยู่ในชีต" : "ข้อมูลทดลองบันทึกไว้ในอุปกรณ์นี้เท่านั้น ยังไม่ได้ส่งไป Google Sheets/Drive"}</span>{filtered.length > 0 && <button className="danger-link" onClick={() => window.confirm(connection.mode === "google" ? "ซ่อนรายการล่าสุดจากแอปหรือไม่? แถวข้อมูลจะยังคงอยู่ใน Google Sheets" : "ลบรายการทดลองล่าสุดออกจากอุปกรณ์นี้หรือไม่?") && onRemove(filtered[0].id)}>{connection.mode === "google" ? "ซ่อนรายการล่าสุด" : "ลบรายการล่าสุด"}</button>}</div>
     </div>
   );

@@ -187,6 +187,8 @@ button:focus-visible, [role="button"]:focus-visible, input:focus-visible, select
 .search-field { flex: 1; }
 .search-field input, .select-field select { width: 100%; border: 0; outline: 0; color: var(--text); background: transparent; font-size: 12px; }
 .select-field { width: 240px; }
+.history-panel-header { align-items: flex-start; }
+.restore-button { flex: 0 0 auto; min-height: 36px; padding: 7px 10px; font-size: 11px; white-space: nowrap; }
 .history-panel .transaction-table { padding-bottom: 12px; }
 .history-footnote { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 11px; }
 .history-footnote .icon { color: var(--blue); }
@@ -380,6 +382,8 @@ button:focus-visible, [role="button"]:focus-visible, input:focus-visible, select
   .filter-bar { flex-direction: column; }
   .select-field { width: 100%; }
   .search-field input, .select-field select { font-size: 16px; }
+  .history-panel-header { flex-direction: column; align-items: stretch; gap: 10px; }
+  .restore-button { width: 100%; white-space: normal; }
   .history-footnote { align-items: start; flex-wrap: wrap; line-height: 1.45; }
   .danger-link { margin-left: 24px; white-space: nowrap; }
   .coach-hero { padding: 17px; flex-wrap: wrap; border-radius: 18px; }
