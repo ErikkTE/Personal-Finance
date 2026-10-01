@@ -1,14 +1,11 @@
 const THAI_DIGITS = "๐๑๒๓๔๕๖๗๘๙";
 
-const MONEY_PATTERNS = [
-  /(?:ยอดชำระสุทธิ|ยอดเงินสุทธิ|ยอดสุทธิ|สุทธิ|grand\s*total|net\s*amount|total\s*due)\D{0,24}(\d{1,3}(?:[ ,]\d{3})*(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?)/i,
-  /(?:จำนวนเงิน(?:ที่โอน|โอน|ชำระ)?|ยอดชำระ|ยอดรับชำระ|ยอดโอน|ยอดเงิน|โอนเงิน|transfer\s*amount|\bamount\b)\D{0,24}(\d{1,3}(?:[ ,]\d{3})*(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?)/i,
-  /(?:รวมทั้งสิ้น|ยอดรวม|รวมเงิน|\btotal\b|\bpaid\b)\D{0,24}(\d{1,3}(?:[ ,]\d{3})*(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?)/i,
-];
-
-const CURRENCY_PATTERN = /(?:฿|THB)\s*(\d{1,3}(?:[ ,]\d{3})*(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?)|((?:\d{1,3}(?:[ ,]\d{3})*|\d+)(?:\.\d{1,2})?)\s*(?:บาท|THB|฿)/i;
-const NUMBER_PATTERN = /(?:฿|THB)?\s*(\d{1,3}(?:[ ,]\d{3})*(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?)/i;
-const AMOUNT_LABEL_PATTERN = /ยอดชำระสุทธิ|ยอดเงินสุทธิ|ยอดสุทธิ|สุทธิ|จำนวนเงิน|ยอดชำระ|ยอดรับชำระ|ยอดโอน|ยอดเงิน|โอนเงิน|รวมทั้งสิ้น|ยอดรวม|รวมเงิน|grand\s*total|net\s*amount|total\s*due|transfer\s*amount|\bamount\b|\btotal\b|\bpaid\b/i;
+const NUMBER_TOKEN = String.raw`(?:\d{1,3}(?:[ ,]\d{3})+|\d+)(?:\.\d{1,2})?`;
+const CURRENCY_PATTERN = new RegExp(String.raw`(?:฿|THB)\s*(${NUMBER_TOKEN})|(${NUMBER_TOKEN})\s*(?:บาท|THB|฿)`, "gi");
+const NUMBER_PATTERN = new RegExp(String.raw`(?<![\d/])${NUMBER_TOKEN}(?!\d)`, "g");
+const AMOUNT_LABEL_PATTERN = /ยอดชำระสุทธิ|ยอดเงินสุทธิ|ยอดสุทธิ|จำนวนเงิน|ยอดชำระ|ยอดรับชำระ|ยอดโอน|ยอดเงิน|รวมทั้งสิ้น|ยอดรวม|รวมเงิน|grand\s*total|net\s*amount|total\s*due|transfer\s*amount|\bamount\b|\btotal\b|\bpaid\b/i;
+const FEE_PATTERN = /ค่าธรรมเนียม|ค่าบริการ|commission|\bfee\b|\bvat\b|\btax\b/i;
+const NON_AMOUNT_CONTEXT_PATTERN = /วันที่|เวลา|เลขที่รายการ|เลขที่อ้างอิง|reference|transaction\s*(?:id|no|number)|บัญชี|account|พร้อมเพย์|qr\s*code/i;
 
 function normalizeDigits(value) {
   return String(value || "").replace(/[๐-๙]/g, (digit) => String(THAI_DIGITS.indexOf(digit)));
@@ -20,29 +17,53 @@ function parseNumber(value) {
 }
 
 function parseAmount(lines) {
+  const candidates = [];
+
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
-    if (!AMOUNT_LABEL_PATTERN.test(line)) continue;
+    const previousLine = lines[index - 1] || "";
+    const nextLine = lines[index + 1] || "";
+    if (FEE_PATTERN.test(line) || FEE_PATTERN.test(previousLine)) continue;
 
-    for (const pattern of MONEY_PATTERNS) {
-      const match = line.match(pattern);
-      const amount = parseNumber(match?.[1]);
-      if (amount) return amount;
+    const hasExplicitLabel = AMOUNT_LABEL_PATTERN.test(line);
+    const hasPreviousLabel = AMOUNT_LABEL_PATTERN.test(previousLine);
+    const hasCurrency = /฿|\bTHB\b|บาท/i.test(line) || /^\s*(?:บาท|THB|฿)\s*$/i.test(nextLine);
+    const hasNonAmountContext = NON_AMOUNT_CONTEXT_PATTERN.test(line);
+    if (hasNonAmountContext && !hasCurrency && !hasExplicitLabel) continue;
+
+    const addCandidate = (rawValue, currencyEvidence = false) => {
+      const amount = parseNumber(rawValue);
+      if (!amount) return;
+
+      const grouped = /,|\s\d{3}/.test(rawValue);
+      const decimal = /\.\d{1,2}$/.test(rawValue);
+      let score = 0;
+      if (currencyEvidence || hasCurrency) score += 100;
+      if (hasExplicitLabel) score += 90;
+      else if (hasPreviousLabel) score += 65;
+      if (grouped) score += 30;
+      if (decimal) score += 30;
+      if (hasNonAmountContext && !currencyEvidence && !hasExplicitLabel) score -= 100;
+      if (score >= 25) candidates.push({ amount, score, index });
+    };
+
+    for (const match of line.matchAll(CURRENCY_PATTERN)) {
+      addCandidate(match[1] || match[2], true);
     }
 
-    if (lines[index + 1]) {
-      const nextLineAmount = parseNumber(lines[index + 1].match(NUMBER_PATTERN)?.[1]);
-      if (nextLineAmount) return nextLineAmount;
+    for (const match of line.matchAll(NUMBER_PATTERN)) {
+      addCandidate(match[0]);
     }
+
+    if (hasExplicitLabel && !NUMBER_PATTERN.test(line) && nextLine) {
+      NUMBER_PATTERN.lastIndex = 0;
+      for (const match of nextLine.matchAll(NUMBER_PATTERN)) addCandidate(match[0]);
+    }
+    NUMBER_PATTERN.lastIndex = 0;
   }
 
-  for (const line of lines) {
-    const match = line.match(CURRENCY_PATTERN);
-    const amount = parseNumber(match?.[1] || match?.[2]);
-    if (amount) return amount;
-  }
-
-  return null;
+  candidates.sort((left, right) => right.score - left.score || right.amount - left.amount);
+  return candidates[0]?.amount ?? null;
 }
 
 function validIsoDate(year, month, day) {
@@ -99,8 +120,33 @@ function parseMerchant(lines) {
   return candidate ? cleanName(candidate) : null;
 }
 
+function parseMemo(lines) {
+  const memoLabel = /(?:หมายเหตุ|บันทึก(?:ช่วยจำ)?|ข้อความถึงผู้รับ|วัตถุประสงค์|purpose|memo|note|description|message)\s*[:：-]?\s*(.*)$/i;
+  const standaloneMemoLabel = /^(?:หมายเหตุ|บันทึก(?:ช่วยจำ)?|ข้อความถึงผู้รับ|วัตถุประสงค์|purpose|memo|note|description|message)\s*[:：-]?$/i;
+  for (let index = 0; index < lines.length; index += 1) {
+    const match = lines[index].match(memoLabel);
+    if (match?.[1]?.trim()) return cleanName(match[1]);
+    if (standaloneMemoLabel.test(lines[index]) && lines[index + 1]) return cleanName(lines[index + 1]);
+  }
+
+  const purposeLine = lines.find((line) => /ค่าเทอม|ค่าเรียน|ค่าเล่าเรียน|tuition|school\s*fee/i.test(line));
+  if (purposeLine) return cleanName(purposeLine);
+
+  const referenceIndex = lines.findIndex((line) => /เลขที่รายการ|เลขที่อ้างอิง|reference\s*(?:no|number)?|transaction\s*(?:id|no|number)/i.test(line));
+  if (referenceIndex < 0) return null;
+
+  const trailingMemo = lines.slice(referenceIndex + 1).filter((line) =>
+    /[\u0E00-\u0E7F]/.test(line)
+    && line.length <= 80
+    && !/สแกน|ตรวจสอบ|qr\s*code|ค่าธรรมเนียม|บาท|ธนาคาร|make\s*by|kbank|สำเร็จ/i.test(line)
+    && !/\d{4,}/.test(line)
+  );
+  return trailingMemo.length ? cleanName(trailingMemo[trailingMemo.length - 1]) : null;
+}
+
 function parseCategory(text) {
   const categoryRules = [
+    ["การศึกษา", /ค่าเทอม|ค่าเรียน|ค่าเล่าเรียน|tuition|school\s*fee|education/i],
     ["หนี้สิน/ผ่อนชำระ", /spaylater|pay\s*later|ผ่อนชำระ|สินเชื่อ|installment/i],
     ["บัตรเครดิต", /ชำระบัตรเครดิต|credit\s*card\s*payment/i],
     ["ค่าโทรศัพท์/อินเทอร์เน็ต", /\bais\b|\bdtac\b|\btrue(?:\s*(?:move|online))?\b|ค่าโทรศัพท์|ค่าอินเทอร์เน็ต|internet\s*bill/i],
@@ -115,6 +161,10 @@ function parseCategory(text) {
 }
 
 function parseChannel(lines) {
+  const makeLogoIndex = lines.findIndex((line) => /make/i.test(line));
+  if (makeLogoIndex >= 0 && lines.slice(makeLogoIndex, makeLogoIndex + 3).some((line) => /k\s*bank/i.test(line))) return "KBank";
+  if (lines.some((line) => /make\s*(?:by\s*)?kbank|k\s*bank\s*make/i.test(line))) return "KBank";
+
   const channelLabel = /ช่องทาง|ชำระผ่าน|จากบัญชี|บัญชีต้นทาง|payment\s*method|from\s*account/i;
   const channelOptions = [
     ["SCB", /\bSCB\b|ไทยพาณิชย์/i],
@@ -140,9 +190,17 @@ export function extractReceiptFields(rawText) {
   const lines = normalizedText.split("\n").map((line) => line.trim()).filter(Boolean);
   const date = parseDate(lines);
   const amount = parseAmount(lines);
-  const name = parseMerchant(lines);
-  const category = parseCategory(normalizedText);
+  const memo = parseMemo(lines);
+  const name = memo || parseMerchant(lines);
+  const category = parseCategory(`${normalizedText}\n${memo || ""}`);
   const channel = parseChannel(lines);
+  const fieldsMissing = [
+    ["วันที่", date],
+    ["ยอดเงิน", amount],
+    ["ชื่อรายการ", name],
+    ["หมวดหมู่", category],
+    ["ช่องทาง", channel],
+  ].filter(([, value]) => !value).map(([label]) => label);
 
   return {
     text: normalizedText.trim(),
@@ -151,6 +209,7 @@ export function extractReceiptFields(rawText) {
     name,
     category,
     channel,
+    fieldsMissing,
     confidence: null,
     fieldsRead: [date, amount, name, category, channel].filter(Boolean).length,
   };
@@ -161,7 +220,7 @@ export async function readReceipt(file, onProgress = () => {}) {
     throw new Error("ระบบอ่านอัตโนมัติรองรับไฟล์รูปภาพเท่านั้น");
   }
 
-  const { createWorker } = await import("tesseract.js");
+  const { createWorker, PSM } = await import("tesseract.js");
   const worker = await createWorker(["tha", "eng"], 1, {
     logger: (message) => onProgress({
       status: message.status,
@@ -170,6 +229,7 @@ export async function readReceipt(file, onProgress = () => {}) {
   });
 
   try {
+    await worker.setParameters({ tessedit_pageseg_mode: PSM.AUTO });
     const result = await worker.recognize(file);
     return {
       ...extractReceiptFields(result.data.text),

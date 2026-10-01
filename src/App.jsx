@@ -212,6 +212,7 @@ function App() {
       ocrText: "",
       ocrFieldsRead: 0,
       ocrConfidence: null,
+      ocrMissingFields: [],
     };
     setDraft(nextDraft);
     if (!file.type.startsWith("image/")) return;
@@ -240,6 +241,7 @@ function App() {
           ocrText: result.text,
           ocrFieldsRead: fieldsRead,
           ocrConfidence: result.confidence,
+          ocrMissingFields: result.fieldsMissing || [],
         };
       });
     }).catch(() => {
@@ -730,7 +732,7 @@ function ReviewModal({ draft, monthChoices, saving, storageMode, onChange, onClo
     : draft.ocrStatus === "reading"
       ? `${ocrProgressLabel(draft.ocrPhase)}${draft.ocrProgress > 0 ? ` ${draft.ocrProgress}%` : "…"} ประมวลผลบนอุปกรณ์นี้ ${imageSaveMessage}`
       : draft.ocrStatus === "done"
-        ? `OCR อ่านข้อมูลได้ ${draft.ocrFieldsRead} ช่อง${draft.ocrConfidence != null ? ` (คะแนนอ่านข้อความ ${draft.ocrConfidence}%)` : ""} โปรดตรวจสอบก่อนบันทึก ${imageSaveMessage}`
+        ? `OCR อ่านข้อมูลได้ ${draft.ocrFieldsRead} ช่อง${draft.ocrConfidence != null ? ` (คะแนนอ่านข้อความ ${draft.ocrConfidence}%)` : ""}${draft.ocrMissingFields?.length ? ` · อ่านไม่ชัด: ${draft.ocrMissingFields.join(", ")}` : ""} โปรดตรวจสอบก่อนบันทึก ${imageSaveMessage}`
         : draft.ocrStatus === "empty" || draft.ocrStatus === "unrecognized"
           ? "อ่านข้อความได้ไม่พอสำหรับเติมข้อมูล ช่องที่อ่านไม่ได้กรุณากรอกเอง แล้วตรวจสอบก่อนบันทึก"
           : draft.ocrStatus === "unsupported"
