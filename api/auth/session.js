@@ -15,6 +15,7 @@ export default function handler(req, res) {
     configured,
     partiallyConfigured: state.partiallyConfigured || (state.configured && !configured),
     missing: state.missing,
+    invalid: state.invalid,
     authenticated: configured && hasValidSession(req, secret),
   });
 }
