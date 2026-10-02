@@ -6,6 +6,7 @@ const NUMBER_PATTERN = new RegExp(String.raw`(?<![\d/])${NUMBER_TOKEN}(?!\d)`, "
 const AMOUNT_LABEL_PATTERN = /ยอดชำระสุทธิ|ยอดเงินสุทธิ|ยอดสุทธิ|จำนวนเงิน|ยอดชำระ|ยอดรับชำระ|ยอดโอน|ยอดเงิน|รวมทั้งสิ้น|ยอดรวม|รวมเงิน|grand\s*total|net\s*amount|total\s*due|transfer\s*amount|\bamount\b|\btotal\b|\bpaid\b/i;
 const FEE_PATTERN = /ค่าธรรมเนียม|ค่าบริการ|commission|\bfee\b|\bvat\b|\btax\b/i;
 const NON_AMOUNT_CONTEXT_PATTERN = /วันที่|เวลา|เลขที่รายการ|เลขที่อ้างอิง|reference|transaction\s*(?:id|no|number)|บัญชี|account|พร้อมเพย์|qr\s*code/i;
+const ENGLISH_MONTH_PATTERN = "jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?";
 
 function normalizeDigits(value) {
   return String(value || "").replace(/[๐-๙]/g, (digit) => String(THAI_DIGITS.indexOf(digit)));
@@ -81,9 +82,9 @@ function parseDate(lines) {
   const ymd = text.match(/\b(20\d{2}|25\d{2})[./-](\d{1,2})[./-](\d{1,2})\b/);
   if (ymd) return validIsoDate(Number(ymd[1]), Number(ymd[2]), Number(ymd[3]));
 
-  const thaiDate = text.match(/(\d{1,2})\s*(มกราคม|ม\.ค\.?|มค|กุมภาพันธ์|ก\.พ\.?|กพ|มีนาคม|มี\.ค\.?|มีค|เมษายน|เม\.ย\.?|เมย|พฤษภาคม|พ\.ค\.?|พค|มิถุนายน|มิ\.ย\.?|มิย|กรกฎาคม|ก\.ค\.?|กค|สิงหาคม|ส\.ค\.?|สค|กันยายน|ก\.ย\.?|กย|ตุลาคม|ต\.ค\.?|ตค|พฤศจิกายน|พ\.ย\.?|พย|ธันวาคม|ธ\.ค\.?|ธค)\s*(\d{2,4})/i);
+  const thaiDate = text.match(/(\d{1,2})\s*(มกราคม|ม\s*\.?\s*ค\.?|กุมภาพันธ์|ก\s*\.?\s*พ\.?|มีนาคม|มี\s*\.?\s*ค\.?|เมษายน|เม\s*\.?\s*ย\.?|พฤษภาคม|พ\s*\.?\s*ค\.?|มิถุนายน|มิ\s*\.?\s*ย\.?|กรกฎาคม|ก\s*\.?\s*ค\.?|สิงหาคม|ส\s*\.?\s*ค\.?|กันยายน|ก\s*\.?\s*ย\.?|ตุลาคม|ต\s*\.?\s*ค\.?|พฤศจิกายน|พ\s*\.?\s*ย\.?|ธันวาคม|ธ\s*\.?\s*ค\.?)\s*(\d{2,4})/i);
   if (thaiDate) {
-    const monthText = thaiDate[2].replaceAll(".", "");
+    const monthText = thaiDate[2].replace(/[.\s]/g, "");
     const month = [
       /^(?:มกราคม|มค)$/i, /^(?:กุมภาพันธ์|กพ)$/i, /^(?:มีนาคม|มีค)$/i,
       /^(?:เมษายน|เมย)$/i, /^(?:พฤษภาคม|พค)$/i, /^(?:มิถุนายน|มิย)$/i,
@@ -91,6 +92,20 @@ function parseDate(lines) {
       /^(?:ตุลาคม|ตค)$/i, /^(?:พฤศจิกายน|พย)$/i, /^(?:ธันวาคม|ธค)$/i,
     ].findIndex((pattern) => pattern.test(monthText)) + 1;
     if (month) return validIsoDate(Number(thaiDate[3]), month, Number(thaiDate[1]));
+  }
+
+  const englishMonthFirst = text.match(new RegExp(`\\b(${ENGLISH_MONTH_PATTERN})\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?[,]?\\s+(\\d{2,4})\\b`, "i"));
+  if (englishMonthFirst) {
+    const monthIndex = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
+      .findIndex((prefix) => englishMonthFirst[1].toLowerCase().startsWith(prefix)) + 1;
+    if (monthIndex) return validIsoDate(Number(englishMonthFirst[3]), monthIndex, Number(englishMonthFirst[2]));
+  }
+
+  const englishDayFirst = text.match(new RegExp(`\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+(${ENGLISH_MONTH_PATTERN})\\.?[,]?\\s+(\\d{2,4})\\b`, "i"));
+  if (englishDayFirst) {
+    const monthIndex = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
+      .findIndex((prefix) => englishDayFirst[2].toLowerCase().startsWith(prefix)) + 1;
+    if (monthIndex) return validIsoDate(Number(englishDayFirst[3]), monthIndex, Number(englishDayFirst[1]));
   }
 
   const dmy = text.match(/\b(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})\b/);
@@ -115,7 +130,7 @@ function parseMerchant(lines) {
     if (standaloneMerchantLabel.test(line) && lines[index + 1]) return cleanName(lines[index + 1]);
   }
 
-  const skipLine = /(?:ใบเสร็จ|ใบกำกับภาษี|tax\s*invoice|receipt|สลิป|payment\s*(?:slip|successful)|transaction|reference|สำเร็จ|เลขที่|วันที่|เวลา|สาขา|โทรศัพท์|โทร\.|ที่อยู่|จำนวนเงิน|ยอด|รวมเงิน|บาท|\b(?:scb|kbank|k\s*plus|kplus|uob|bbl|ktb|ttb|krungthai\s*next)\b|ธนาคารไทยพาณิชย์|ธนาคารกสิกรไทย|ธนาคารกรุงไทย|พร้อมเพย์)/i;
+  const skipLine = /(?:ใบเสร็จ|ใบกำกับภาษี|tax\s*invoice|receipt|สลิป|payment\s*(?:slip|successful)|transaction|reference|สำเร็จ|เลขที่|วันที่|เวลา|สาขา|โทรศัพท์|โทร\.|ที่อยู่|จำนวนเงิน|ยอด|รวมเงิน|บาท|\b(?:make|scb|kbank|k\s*plus|kplus|uob|bbl|ktb|ttb|tmb|cimb|gsb|baac|krungthai|krungsri|bangkok\s*bank|bualuang|ayudhya|kma|mymo|truemoney|promptpay|a[\s-]?mobile)\b|ธนาคารไทยพาณิชย์|ธนาคารกสิกรไทย|ธนาคารกรุงไทย|ธนาคารกรุงเทพ|ธนาคารกรุงศรี|ธนาคารออมสิน|ธนาคารเพื่อการเกษตร|พร้อมเพย์)/i;
   const candidate = lines.find((line) => /[A-Za-z\u0E00-\u0E7F]/.test(line) && !skipLine.test(line) && line.length <= 80);
   return candidate ? cleanName(candidate) : null;
 }
@@ -165,16 +180,24 @@ function parseChannel(lines) {
   if (makeLogoIndex >= 0 && lines.slice(makeLogoIndex, makeLogoIndex + 3).some((line) => /k\s*bank/i.test(line))) return "KBank";
   if (lines.some((line) => /make\s*(?:by\s*)?kbank|k\s*bank\s*make/i.test(line))) return "KBank";
 
-  const channelLabel = /ช่องทาง|ชำระผ่าน|จากบัญชี|บัญชีต้นทาง|payment\s*method|from\s*account/i;
   const channelOptions = [
-    ["SCB", /\bSCB\b|ไทยพาณิชย์/i],
-    ["KBank", /\bKBank\b|กสิกรไทย|K\s*PLUS/i],
-    ["UOB", /\bUOB\b/i],
+    ["SCB", /\bSCB\b|ไทยพาณิชย์|SCB\s*Easy/i],
+    ["KBank", /\bk\s*bank\b|\bkbank\b|กสิกรไทย|กสิกร|\bk\s*plus\b|\bkplus\b/i],
+    ["Krungthai", /\bKTB\b|Krungthai|กรุงไทย|เป๋าตัง|NEXT/i],
+    ["Bangkok Bank", /\bBBL\b|Bangkok\s*Bank|ธนาคารกรุงเทพ|บัวหลวง|Bualuang/i],
+    ["Krungsri", /Krungsri|Ayudhya|กรุงศรี|KMA/i],
+    ["ttb", /\bttb\b|\bTMB\b|ธนชาต|ทหารไทย|ttb\s*touch/i],
+    ["UOB", /\bUOB\b|ยูโอบี/i],
+    ["CIMB Thai", /\bCIMB(?:\s*Thai)?\b|ซีไอเอ็มบี/i],
+    ["GSB", /\bGSB\b|ออมสิน|My\s*Mo/i],
+    ["BAAC", /\bBAAC\b|ธ\s*\.?\s*ก\s*\.?\s*ส|เพื่อการเกษตร|A[\s-]?Mobile/i],
+    ["TrueMoney", /True\s*Money|TrueMoney|ทรูมันนี่/i],
     ["Shopee", /Shopee|SPayLater/i],
     ["พร้อมเพย์", /PromptPay|พร้อมเพย์/i],
     ["เงินสด", /เงินสด|cash/i],
     ["บัตรเครดิต", /บัตรเครดิต|credit\s*card/i],
   ];
+  const channelLabel = /ช่องทาง|ชำระผ่าน|จากบัญชี|บัญชีต้นทาง|โอนจาก|แอปธนาคาร|mobile\s*banking|banking\s*app|payment\s*method|from\s*account|transfer\s*from/i;
 
   for (let index = 0; index < lines.length; index += 1) {
     if (!channelLabel.test(lines[index])) continue;
@@ -182,7 +205,73 @@ function parseChannel(lines) {
     const match = channelOptions.find(([, pattern]) => pattern.test(source));
     if (match) return match[0];
   }
+
+  const headerText = lines.slice(0, 6).join(" ");
+  const headerChannel = channelOptions.find(([, pattern]) => pattern.test(headerText));
+  if (headerChannel) return headerChannel[0];
   return null;
+}
+
+function mergeOcrResults(results) {
+  const preferred = [...results].sort((left, right) =>
+    right.fieldsRead - left.fieldsRead || (right.confidence || 0) - (left.confidence || 0)
+  )[0];
+  const conflicts = new Set();
+  const pickField = (field, label) => {
+    const values = [...new Set(results.map((result) => result[field]).filter((value) => value != null && value !== ""))];
+    if (values.length > 1) {
+      conflicts.add(label);
+      return null;
+    }
+    return values[0] ?? null;
+  };
+  const date = pickField("date", "วันที่");
+  const amount = pickField("amount", "ยอดเงิน");
+  const name = pickField("name", "ชื่อรายการ");
+  const category = pickField("category", "หมวดหมู่");
+  const channel = pickField("channel", "ช่องทาง");
+  const fieldsMissing = [
+    ["วันที่", date], ["ยอดเงิน", amount], ["ชื่อรายการ", name], ["หมวดหมู่", category], ["ช่องทาง", channel],
+  ].filter(([label, value]) => !value || conflicts.has(label)).map(([label]) => label);
+
+  return {
+    ...preferred,
+    date,
+    amount,
+    name,
+    category,
+    channel,
+    fieldsMissing,
+    fieldsRead: [date, amount, name, category, channel].filter(Boolean).length,
+  };
+}
+
+async function createEnhancedImage(file) {
+  if (typeof createImageBitmap !== "function" || typeof document === "undefined") return null;
+
+  let bitmap;
+  try {
+    bitmap = await createImageBitmap(file);
+  } catch {
+    return null;
+  }
+
+  try {
+    const longestEdge = Math.max(bitmap.width, bitmap.height);
+    const scale = Math.min(1.6, 2200 / longestEdge);
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+    const context = canvas.getContext("2d", { alpha: false });
+    if (!context) return null;
+    if ("filter" in context) context.filter = "grayscale(1) contrast(1.25)";
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    return await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+  } catch {
+    return null;
+  } finally {
+    bitmap.close?.();
+  }
 }
 
 export function extractReceiptFields(rawText) {
@@ -221,20 +310,38 @@ export async function readReceipt(file, onProgress = () => {}) {
   }
 
   const { createWorker, PSM } = await import("tesseract.js");
+  let passIndex = 0;
   const worker = await createWorker(["tha", "eng"], 1, {
-    logger: (message) => onProgress({
-      status: message.status,
-      progress: Math.max(0, Math.min(100, Math.round((message.progress || 0) * 100))),
-    }),
+    logger: (message) => {
+      const passProgress = Math.max(0, Math.min(100, Math.round((message.progress || 0) * 100)));
+      onProgress({ status: message.status, progress: passIndex === 0 ? Math.round(passProgress * 0.75) : 75 + Math.round(passProgress * 0.25) });
+    },
   });
 
   try {
     await worker.setParameters({ tessedit_pageseg_mode: PSM.AUTO });
-    const result = await worker.recognize(file);
-    return {
-      ...extractReceiptFields(result.data.text),
-      confidence: Number.isFinite(result.data.confidence) ? Math.round(result.data.confidence) : null,
+    const firstPass = await worker.recognize(file);
+    const first = {
+      ...extractReceiptFields(firstPass.data.text),
+      confidence: Number.isFinite(firstPass.data.confidence) ? Math.round(firstPass.data.confidence) : null,
     };
+    const needsSecondPass = first.fieldsMissing.length > 0 || (first.confidence != null && first.confidence < 90);
+    if (!needsSecondPass) {
+      onProgress({ status: "recognizing text", progress: 100 });
+      return first;
+    }
+
+    passIndex = 1;
+    onProgress({ status: "recognizing text", progress: 75 });
+    const enhancedImage = await createEnhancedImage(file);
+    await worker.setParameters({ tessedit_pageseg_mode: PSM.SPARSE_TEXT });
+    const secondPass = await worker.recognize(enhancedImage || file);
+    const second = {
+      ...extractReceiptFields(secondPass.data.text),
+      confidence: Number.isFinite(secondPass.data.confidence) ? Math.round(secondPass.data.confidence) : null,
+    };
+    onProgress({ status: "recognizing text", progress: 100 });
+    return mergeOcrResults([first, second]);
   } finally {
     await worker.terminate();
   }
