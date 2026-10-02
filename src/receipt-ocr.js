@@ -82,7 +82,9 @@ function parseDate(lines) {
   const ymd = text.match(/\b(20\d{2}|25\d{2})[./-](\d{1,2})[./-](\d{1,2})\b/);
   if (ymd) return validIsoDate(Number(ymd[1]), Number(ymd[2]), Number(ymd[3]));
 
-  const thaiDate = text.match(/(\d{1,2})\s*(มกราคม|ม\s*\.?\s*ค\.?|กุมภาพันธ์|ก\s*\.?\s*พ\.?|มีนาคม|มี\s*\.?\s*ค\.?|เมษายน|เม\s*\.?\s*ย\.?|พฤษภาคม|พ\s*\.?\s*ค\.?|มิถุนายน|มิ\s*\.?\s*ย\.?|กรกฎาคม|ก\s*\.?\s*ค\.?|สิงหาคม|ส\s*\.?\s*ค\.?|กันยายน|ก\s*\.?\s*ย\.?|ตุลาคม|ต\s*\.?\s*ค\.?|พฤศจิกายน|พ\s*\.?\s*ย\.?|ธันวาคม|ธ\s*\.?\s*ค\.?)\s*(\d{2,4})/i);
+  // OCR can insert a stray digit between repeated Thai initials, e.g. ต3ต.ค.
+  const thaiDateText = text.replace(/([\u0E01-\u0E2E])\d\1(?=\s*\.?\s*[\u0E01-\u0E2E])/g, "$1");
+  const thaiDate = thaiDateText.match(/(?<![\d\u0E00-\u0E7F])(\d{1,2})\s*(มกราคม|ม\s*\.?\s*ค\.?|กุมภาพันธ์|ก\s*\.?\s*พ\.?|มีนาคม|มี\s*\.?\s*ค\.?|เมษายน|เม\s*\.?\s*ย\.?|พฤษภาคม|พ\s*\.?\s*ค\.?|มิถุนายน|มิ\s*\.?\s*ย\.?|กรกฎาคม|ก\s*\.?\s*ค\.?|สิงหาคม|ส\s*\.?\s*ค\.?|กันยายน|ก\s*\.?\s*ย\.?|ตุลาคม|ต\s*\.?\s*ค\.?|พฤศจิกายน|พ\s*\.?\s*ย\.?|ธันวาคม|ธ\s*\.?\s*ค\.?)\s*(\d{2,4})(?!\d)/i);
   if (thaiDate) {
     const monthText = thaiDate[2].replace(/[.\s]/g, "");
     const month = [
@@ -144,8 +146,12 @@ function parseMemo(lines) {
     if (standaloneMemoLabel.test(lines[index]) && lines[index + 1]) return cleanName(lines[index + 1]);
   }
 
-  const purposeLine = lines.find((line) => /ค่าเทอม|ค่าเรียน|ค่าเล่าเรียน|tuition|school\s*fee/i.test(line));
-  if (purposeLine) return cleanName(purposeLine);
+  const purposeLine = lines.find((line) => /ค[่]?าเทอม|ค[่]?าเรียน|ค[่]?าเล่าเรียน|tuition|school\s*fee/i.test(line));
+  if (purposeLine) {
+    return cleanName(purposeLine)
+      .replace(/^ค[่]?าเทอม\s*ล[ู]?ก$/i, "ค่าเทอมลูก")
+      .replace(/^ค[่]?าเทอม/i, "ค่าเทอม");
+  }
 
   const referenceIndex = lines.findIndex((line) => /เลขที่รายการ|เลขที่อ้างอิง|reference\s*(?:no|number)?|transaction\s*(?:id|no|number)/i.test(line));
   if (referenceIndex < 0) return null;
@@ -161,7 +167,7 @@ function parseMemo(lines) {
 
 function parseCategory(text) {
   const categoryRules = [
-    ["การศึกษา", /ค่าเทอม|ค่าเรียน|ค่าเล่าเรียน|tuition|school\s*fee|education/i],
+    ["การศึกษา", /ค[่]?าเทอม|ค[่]?าเรียน|ค[่]?าเล่าเรียน|tuition|school\s*fee|education/i],
     ["หนี้สิน/ผ่อนชำระ", /spaylater|pay\s*later|ผ่อนชำระ|สินเชื่อ|installment/i],
     ["บัตรเครดิต", /ชำระบัตรเครดิต|credit\s*card\s*payment/i],
     ["ค่าโทรศัพท์/อินเทอร์เน็ต", /\bais\b|\bdtac\b|\btrue(?:\s*(?:move|online))?\b|ค่าโทรศัพท์|ค่าอินเทอร์เน็ต|internet\s*bill/i],
@@ -212,7 +218,41 @@ function parseChannel(lines) {
   return null;
 }
 
-function mergeOcrResults(results) {
+function parseEmvQrAmount(payload) {
+  const value = String(payload || "").trim();
+  const crcIndex = value.lastIndexOf("6304");
+  if (crcIndex < 0 || crcIndex + 8 !== value.length) return null;
+
+  let crc = 0xffff;
+  for (let index = 0; index < crcIndex + 4; index += 1) {
+    crc ^= value.charCodeAt(index) << 8;
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = (crc & 0x8000) ? ((crc << 1) ^ 0x1021) : (crc << 1);
+      crc &= 0xffff;
+    }
+  }
+  if (crc.toString(16).padStart(4, "0").toUpperCase() !== value.slice(crcIndex + 4).toUpperCase()) return null;
+
+  const tags = new Map();
+  let offset = 0;
+  while (offset + 4 <= value.length) {
+    const tag = value.slice(offset, offset + 2);
+    const length = Number(value.slice(offset + 2, offset + 4));
+    if (!/^\d{2}$/.test(tag) || !Number.isInteger(length)) return null;
+    const contentStart = offset + 4;
+    const contentEnd = contentStart + length;
+    if (contentEnd > value.length) return null;
+    tags.set(tag, value.slice(contentStart, contentEnd));
+    offset = contentEnd;
+  }
+
+  if (offset !== value.length || tags.get("53") !== "764") return null;
+  const rawAmount = tags.get("54");
+  if (!rawAmount || !/^\d+(?:\.\d{1,2})?$/.test(rawAmount)) return null;
+  return parseNumber(rawAmount);
+}
+
+function mergeOcrResults(results, qrInfo = { detected: false, amount: null }) {
   const preferred = [...results].sort((left, right) =>
     right.fieldsRead - left.fieldsRead || (right.confidence || 0) - (left.confidence || 0)
   )[0];
@@ -226,52 +266,136 @@ function mergeOcrResults(results) {
     return values[0] ?? null;
   };
   const date = pickField("date", "วันที่");
-  const amount = pickField("amount", "ยอดเงิน");
+  let amount = pickField("amount", "ยอดเงิน");
   const name = pickField("name", "ชื่อรายการ");
   const category = pickField("category", "หมวดหมู่");
   const channel = pickField("channel", "ช่องทาง");
+  const qrAmountMismatch = qrInfo.amount != null
+    && results.some((result) => result.amount != null && result.amount !== qrInfo.amount);
+  if (qrAmountMismatch) {
+    amount = null;
+    conflicts.add("ยอดเงิน");
+  }
   const fieldsMissing = [
     ["วันที่", date], ["ยอดเงิน", amount], ["ชื่อรายการ", name], ["หมวดหมู่", category], ["ช่องทาง", channel],
   ].filter(([label, value]) => !value || conflicts.has(label)).map(([label]) => label);
 
   return {
     ...preferred,
+    text: [...new Set(results.map((result) => result.text).filter(Boolean))].join("\n\n"),
     date,
     amount,
     name,
     category,
     channel,
+    conflicts: [...conflicts],
+    qrDetected: Boolean(qrInfo.detected),
+    qrAmount: qrInfo.amount,
+    qrAmountMismatch,
+    ocrAmountCandidates: [...new Set(results.map((result) => result.amount).filter((value) => value != null))],
     fieldsMissing,
     fieldsRead: [date, amount, name, category, channel].filter(Boolean).length,
   };
 }
 
-async function createEnhancedImage(file) {
-  if (typeof createImageBitmap !== "function" || typeof document === "undefined") return null;
-
-  let bitmap;
-  try {
-    bitmap = await createImageBitmap(file);
-  } catch {
-    return null;
+async function loadImageSource(file) {
+  if (typeof document === "undefined") return null;
+  if (typeof createImageBitmap === "function") {
+    try {
+      const bitmap = await createImageBitmap(file);
+      return { image: bitmap, close: () => bitmap.close?.() };
+    } catch {
+      // Fall back to the browser image decoder for formats createImageBitmap cannot read.
+    }
   }
 
+  const url = URL.createObjectURL(file);
+  const image = new Image();
   try {
-    const longestEdge = Math.max(bitmap.width, bitmap.height);
-    const scale = Math.min(1.6, 2200 / longestEdge);
-    const canvas = document.createElement("canvas");
-    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
-    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
-    const context = canvas.getContext("2d", { alpha: false });
-    if (!context) return null;
-    if ("filter" in context) context.filter = "grayscale(1) contrast(1.25)";
-    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-    return await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+    await new Promise((resolve, reject) => {
+      image.onload = resolve;
+      image.onerror = reject;
+      image.src = url;
+    });
+    return { image, close: () => URL.revokeObjectURL(url) };
   } catch {
+    URL.revokeObjectURL(url);
     return null;
+  }
+}
+
+function renderImageRegion(image, top, bottom, { maxEdge = 2200, upscale = true, enhance = true } = {}) {
+  const width = image.width || image.naturalWidth;
+  const height = image.height || image.naturalHeight;
+  if (!width || !height) return null;
+  const sourceY = Math.round(height * top);
+  const sourceHeight = Math.max(1, Math.round(height * bottom) - sourceY);
+  const sourceWidth = width;
+  const longestEdge = Math.max(sourceWidth, sourceHeight);
+  const scale = Math.min(upscale ? 1.6 : 1, maxEdge / longestEdge);
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(sourceWidth * scale));
+  canvas.height = Math.max(1, Math.round(sourceHeight * scale));
+  const context = canvas.getContext("2d", { alpha: false, willReadFrequently: !enhance });
+  if (!context) return null;
+  if (enhance && "filter" in context) context.filter = "grayscale(1) contrast(1.25)";
+  context.drawImage(image, 0, sourceY, sourceWidth, sourceHeight, 0, 0, canvas.width, canvas.height);
+  return canvas;
+}
+
+function canvasToBlob(canvas) {
+  if (!canvas) return Promise.resolve(null);
+  return new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+}
+
+async function prepareReceiptImages(file) {
+  const loaded = await loadImageSource(file);
+  if (!loaded) return { full: null, dateRegion: null, amountRegion: null, qrImageData: null };
+  try {
+    const fullCanvas = renderImageRegion(loaded.image, 0, 1);
+    const dateCanvas = renderImageRegion(loaded.image, 0.02, 0.36);
+    const amountCanvas = renderImageRegion(loaded.image, 0.38, 0.96);
+    const qrCanvas = renderImageRegion(loaded.image, 0, 1, { maxEdge: 1800, upscale: false, enhance: false });
+    let qrImageData = null;
+    try {
+      const qrContext = qrCanvas?.getContext("2d", { willReadFrequently: true });
+      if (qrContext && qrCanvas) qrImageData = qrContext.getImageData(0, 0, qrCanvas.width, qrCanvas.height);
+    } catch {
+      qrImageData = null;
+    }
+    const [full, dateRegion, amountRegion] = await Promise.all([
+      canvasToBlob(fullCanvas), canvasToBlob(dateCanvas), canvasToBlob(amountCanvas),
+    ]);
+    return { full, dateRegion, amountRegion, qrImageData };
+  } catch {
+    return { full: null, dateRegion: null, amountRegion: null, qrImageData: null };
   } finally {
-    bitmap.close?.();
+    loaded.close();
   }
+}
+
+async function decodeQr(qrImageData) {
+  if (!qrImageData) return { detected: false, amount: null };
+  try {
+    const qrModule = await import("jsqr");
+    const jsQR = qrModule.default || qrModule;
+    const code = jsQR(qrImageData.data, qrImageData.width, qrImageData.height, { inversionAttempts: "attemptBoth" });
+    return code ? { detected: true, amount: parseEmvQrAmount(code.data) } : { detected: false, amount: null };
+  } catch {
+    return { detected: false, amount: null };
+  }
+}
+
+function parseFocusedResult(ocrData, focus) {
+  const parsed = {
+    ...extractReceiptFields(ocrData.text),
+    confidence: Number.isFinite(ocrData.confidence) ? Math.round(ocrData.confidence) : null,
+  };
+  for (const field of ["date", "amount", "name", "category", "channel"]) {
+    if (!focus.includes(field)) parsed[field] = null;
+  }
+  parsed.fieldsRead = focus.filter((field) => parsed[field] != null).length;
+  return parsed;
 }
 
 export function extractReceiptFields(rawText) {
@@ -309,39 +433,49 @@ export async function readReceipt(file, onProgress = () => {}) {
     throw new Error("ระบบอ่านอัตโนมัติรองรับไฟล์รูปภาพเท่านั้น");
   }
 
+  onProgress({ status: "preparing receipt image", progress: 3 });
+  const images = await prepareReceiptImages(file);
+  onProgress({ status: "reading receipt QR", progress: 8 });
+  const qrInfo = await decodeQr(images.qrImageData);
+
   const { createWorker, PSM } = await import("tesseract.js");
-  let passIndex = 0;
+  let progressRange = [8, 38];
   const worker = await createWorker(["tha", "eng"], 1, {
     logger: (message) => {
       const passProgress = Math.max(0, Math.min(100, Math.round((message.progress || 0) * 100)));
-      onProgress({ status: message.status, progress: passIndex === 0 ? Math.round(passProgress * 0.75) : 75 + Math.round(passProgress * 0.25) });
+      const progress = progressRange[0] + Math.round((progressRange[1] - progressRange[0]) * (passProgress / 100));
+      onProgress({ status: message.status, progress });
     },
   });
 
   try {
     await worker.setParameters({ tessedit_pageseg_mode: PSM.AUTO });
     const firstPass = await worker.recognize(file);
-    const first = {
-      ...extractReceiptFields(firstPass.data.text),
-      confidence: Number.isFinite(firstPass.data.confidence) ? Math.round(firstPass.data.confidence) : null,
-    };
-    const needsSecondPass = first.fieldsMissing.length > 0 || (first.confidence != null && first.confidence < 90);
-    if (!needsSecondPass) {
-      onProgress({ status: "recognizing text", progress: 100 });
-      return first;
+    const first = parseFocusedResult(firstPass.data, ["date", "amount", "name", "category", "channel"]);
+
+    progressRange = [38, 66];
+    onProgress({ status: "recognizing text", progress: progressRange[0] });
+    await worker.setParameters({ tessedit_pageseg_mode: PSM.SPARSE_TEXT });
+    const secondPass = await worker.recognize(images.full || file);
+    const second = parseFocusedResult(secondPass.data, ["date", "amount", "name", "category", "channel"]);
+    const results = [first, second];
+    const merged = mergeOcrResults(results, qrInfo);
+    const cropPlans = [];
+    if (!merged.date && images.dateRegion) cropPlans.push({ image: images.dateRegion, field: "date" });
+    if (!merged.amount && images.amountRegion) cropPlans.push({ image: images.amountRegion, field: "amount" });
+
+    for (let index = 0; index < cropPlans.length; index += 1) {
+      const plan = cropPlans[index];
+      const start = 66 + Math.round((31 * index) / cropPlans.length);
+      const end = 66 + Math.round((31 * (index + 1)) / cropPlans.length);
+      progressRange = [start, end];
+      onProgress({ status: plan.field === "date" ? "recognizing date region" : "recognizing amount region", progress: start });
+      const cropPass = await worker.recognize(plan.image);
+      results.push(parseFocusedResult(cropPass.data, [plan.field]));
     }
 
-    passIndex = 1;
-    onProgress({ status: "recognizing text", progress: 75 });
-    const enhancedImage = await createEnhancedImage(file);
-    await worker.setParameters({ tessedit_pageseg_mode: PSM.SPARSE_TEXT });
-    const secondPass = await worker.recognize(enhancedImage || file);
-    const second = {
-      ...extractReceiptFields(secondPass.data.text),
-      confidence: Number.isFinite(secondPass.data.confidence) ? Math.round(secondPass.data.confidence) : null,
-    };
     onProgress({ status: "recognizing text", progress: 100 });
-    return mergeOcrResults([first, second]);
+    return mergeOcrResults(results, qrInfo);
   } finally {
     await worker.terminate();
   }

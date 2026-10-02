@@ -143,11 +143,11 @@ export function createDraftFromFile(file) {
   const category = detected?.category || "อื่นๆ";
 
   return {
-    date: today,
-    budgetMonth: deriveBudgetMonth(today, category),
+    date: detected ? today : "",
+    budgetMonth: deriveBudgetMonth(detected ? today : "", category),
     type: "expense",
     category,
-    name: detected?.name || "รายการจากรูปใหม่",
+    name: detected?.name || "",
     amount: detected?.amount ?? "",
     channel: detected?.channel || "อื่นๆ",
     nature: "ครั้งเดียว",

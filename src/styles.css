@@ -246,6 +246,9 @@ button:focus-visible, [role="button"]:focus-visible, input:focus-visible, select
 .review-note-done { color: #087443; background: #effcf5; }
 .review-note-empty, .review-note-unrecognized, .review-note-failed { color: #806121; background: #fff8e9; }
 .review-note-unsupported { color: #59677a; background: #f3f6fa; }
+.qr-review-note { display: flex; gap: 7px; padding: 9px 10px; border: 1px solid #d7e7ff; border-radius: 8px; color: #315f9b; background: #f4f8ff; font-size: 10px; line-height: 1.5; }
+.qr-review-note .icon { flex: 0 0 auto; margin-top: 1px; }
+.qr-review-note-warning { border-color: #f5d7a2; color: #805713; background: #fff8e9; }
 .ocr-progress { display: block; height: 4px; margin-top: 7px; overflow: hidden; border-radius: 4px; background: #d9e8fb; }
 .ocr-progress > span { display: block; height: 100%; border-radius: inherit; background: var(--blue); transition: width .2s ease; }
 .ocr-text-details { padding-top: 2px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; }

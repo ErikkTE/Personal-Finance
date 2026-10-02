@@ -45,6 +45,10 @@ function ocrProgressLabel(status) {
   if (status === "loading tesseract core") return "กำลังเตรียมระบบอ่านข้อความ";
   if (status === "loading language traineddata") return "กำลังโหลดชุดภาษาไทยและอังกฤษ";
   if (status === "initializing api") return "กำลังเริ่มระบบ OCR";
+  if (status === "preparing receipt image") return "กำลังปรับภาพในอุปกรณ์";
+  if (status === "reading receipt QR") return "กำลังอ่าน QR ในอุปกรณ์";
+  if (status === "recognizing date region") return "กำลังอ่านบริเวณวันที่";
+  if (status === "recognizing amount region") return "กำลังอ่านบริเวณจำนวนเงิน";
   if (status === "recognizing text") return "กำลังอ่านข้อความจากรูป";
   return "กำลังเตรียมอ่านสลิป";
 }
@@ -211,8 +215,11 @@ function App() {
       ocrPhase: "",
       ocrText: "",
       ocrFieldsRead: 0,
-      ocrConfidence: null,
       ocrMissingFields: [],
+      ocrAmountCandidates: [],
+      qrDetected: false,
+      qrAmount: null,
+      ocrQrAmountMismatch: false,
     };
     setDraft(nextDraft);
     if (!file.type.startsWith("image/")) return;
@@ -240,8 +247,11 @@ function App() {
           ocrPhase: "recognizing text",
           ocrText: result.text,
           ocrFieldsRead: fieldsRead,
-          ocrConfidence: result.confidence,
           ocrMissingFields: result.fieldsMissing || [],
+          ocrAmountCandidates: result.ocrAmountCandidates || [],
+          qrDetected: Boolean(result.qrDetected),
+          qrAmount: result.qrAmount ?? null,
+          ocrQrAmountMismatch: Boolean(result.qrAmountMismatch),
         };
       });
     }).catch(() => {
@@ -272,8 +282,12 @@ function App() {
       return;
     }
     const amount = Number(String(draft?.amount ?? "").replaceAll(",", ""));
-    if (!draft || !Number.isFinite(amount) || amount <= 0 || !String(draft.name || "").trim()) {
-      setToast("กรุณาตรวจสอบจำนวนเงินก่อนยืนยันรายการ");
+    if (!draft?.date) {
+      setToast("กรุณาระบุวันที่จากสลิปก่อนยืนยันรายการ");
+      return;
+    }
+    if (!Number.isFinite(amount) || amount <= 0 || !String(draft.name || "").trim()) {
+      setToast("กรุณาตรวจสอบจำนวนเงินและชื่อรายการก่อนยืนยัน");
       return;
     }
 
@@ -732,14 +746,21 @@ function ReviewModal({ draft, monthChoices, saving, storageMode, onChange, onClo
     : draft.ocrStatus === "reading"
       ? `${ocrProgressLabel(draft.ocrPhase)}${draft.ocrProgress > 0 ? ` ${draft.ocrProgress}%` : "…"} ประมวลผลบนอุปกรณ์นี้ ${imageSaveMessage}`
       : draft.ocrStatus === "done"
-        ? `OCR อ่านข้อมูลได้ ${draft.ocrFieldsRead} ช่อง${draft.ocrConfidence != null ? ` (คะแนนอ่านข้อความ ${draft.ocrConfidence}%)` : ""}${draft.ocrMissingFields?.length ? ` · อ่านไม่ชัด: ${draft.ocrMissingFields.join(", ")}` : ""} โปรดตรวจสอบก่อนบันทึก ${imageSaveMessage}`
+        ? `OCR อ่านข้อมูลได้ ${draft.ocrFieldsRead} ช่อง${draft.ocrMissingFields?.length ? ` · อ่านไม่ชัดหรือผลไม่ตรงกัน: ${draft.ocrMissingFields.join(", ")}` : ""} ผล OCR ยังไม่ใช่การยืนยันจากธนาคาร โปรดตรวจสอบก่อนบันทึก ${imageSaveMessage}`
         : draft.ocrStatus === "empty" || draft.ocrStatus === "unrecognized"
           ? "อ่านข้อความได้ไม่พอสำหรับเติมข้อมูล ช่องที่อ่านไม่ได้กรุณากรอกเอง แล้วตรวจสอบก่อนบันทึก"
           : draft.ocrStatus === "unsupported"
             ? "OCR รองรับเฉพาะไฟล์รูปภาพในตอนนี้ ไฟล์ PDF กรุณากรอกข้อมูลเอง"
             : draft.ocrStatus === "failed"
               ? "OCR อ่านรูปนี้ไม่สำเร็จ ตรวจการเชื่อมต่ออินเทอร์เน็ตแล้วกรอกข้อมูลเองได้เลย"
-              : "เลือกรูปสลิปเพื่อให้ OCR อ่านข้อมูลเบื้องต้น";
+            : "เลือกรูปสลิปเพื่อให้ OCR อ่านข้อมูลเบื้องต้น";
+  const qrReviewMessage = !draft.qrDetected
+    ? ""
+    : draft.ocrQrAmountMismatch
+      ? `ยอด OCR (${(draft.ocrAmountCandidates || []).map((amount) => formatNumber(amount)).join(" / ")} บาท) ไม่ตรงกับยอดใน QR (${formatNumber(draft.qrAmount)} บาท) ระบบเว้นยอดไว้ให้ตรวจสอบเอง · QR นี้ยังไม่ได้ยืนยันกับธนาคาร`
+      : draft.qrAmount != null
+        ? `อ่าน QR ในอุปกรณ์ได้ พบยอด ${formatNumber(draft.qrAmount)} บาทในข้อมูล QR · ใช้ประกอบการตรวจเท่านั้น ยังไม่ได้ยืนยันกับธนาคาร`
+        : "อ่านพบ QR ในอุปกรณ์แล้ว แต่ไม่ได้ตรวจสอบธุรกรรมกับธนาคาร";
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <section className="review-modal" role="dialog" aria-modal="true" aria-labelledby="review-title">
@@ -748,6 +769,7 @@ function ReviewModal({ draft, monthChoices, saving, storageMode, onChange, onClo
           <div className="receipt-preview">{draft.previewUrl ? <img src={draft.previewUrl} alt="ตัวอย่างหลักฐานที่อัปโหลด" /> : <div className="preview-empty"><Icon name="image" size={27} /><span>{draft.fileName || "ไม่มีภาพตัวอย่าง"}</span></div>}{draft.evidenceUrl && <a className="evidence-link" href={draft.evidenceUrl} target="_blank" rel="noreferrer">เปิดหลักฐานใน Google Drive</a>}<span className="preview-status" aria-live="polite"><Icon name={draft.ocrStatus === "done" ? "check" : "info"} size={13} />{isOcrProcessing ? `${ocrProgressLabel(draft.ocrPhase)}${draft.ocrProgress > 0 ? ` ${draft.ocrProgress}%` : "…"}` : draft.ocrStatus === "done" ? "อ่านข้อความแล้ว · กรุณาตรวจสอบ" : draft.ocrStatus === "unsupported" ? "ไฟล์นี้ยังอ่านอัตโนมัติไม่ได้" : draft.ocrStatus === "failed" || draft.ocrStatus === "empty" || draft.ocrStatus === "unrecognized" ? "กรุณาตรวจหรือกรอกข้อมูลเอง" : "รอตรวจสอบข้อมูล"}</span></div>
           <div className="review-form">
             {!isExisting && <div className={`review-note review-note-${draft.ocrStatus || "idle"}`} data-state={draft.ocrStatus || "idle"} role="status" aria-live="polite"><Icon name={draft.ocrStatus === "done" ? "check" : "info"} size={16} /><span>{reviewMessage}{isOcrProcessing && <span className="ocr-progress" role="progressbar" aria-label="ความคืบหน้าการอ่านข้อความ" aria-valuemin="0" aria-valuemax="100" aria-valuenow={draft.ocrProgress}><span style={{ width: `${draft.ocrProgress}%` }} /></span>}</span></div>}
+            {!isExisting && qrReviewMessage && <div className={`qr-review-note${draft.ocrQrAmountMismatch ? " qr-review-note-warning" : ""}`} role="status"><Icon name={draft.ocrQrAmountMismatch ? "info" : "check"} size={15} /><span>{qrReviewMessage}</span></div>}
             <label>วันที่เกิดรายการ<input type="date" value={draft.date || ""} onChange={(event) => onChange("date", event.target.value)} disabled={fieldsDisabled} /></label>
             <label>รายการ<input type="text" value={draft.name || ""} onChange={(event) => onChange("name", event.target.value)} disabled={fieldsDisabled} /></label>
             <label>จำนวนเงิน (บาท)<input type="number" min="0" step="0.01" value={draft.amount ?? ""} onChange={(event) => onChange("amount", event.target.value)} disabled={fieldsDisabled} /></label>
