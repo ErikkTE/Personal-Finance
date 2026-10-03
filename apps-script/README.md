@@ -9,7 +9,7 @@ Open **Project Settings → Script Properties** and add:
 | Property | Value |
 | --- | --- |
 | `SPREADSHEET_ID` | ID of the spreadsheet that contains the `Transactions` tab |
-| `DRIVE_FOLDER_ID` | ID of the Drive folder for receipt files |
+| `DRIVE_FOLDER_ID` | ID of the top-level Drive folder for receipt files |
 | `API_SHARED_SECRET` | A private random value of at least 32 characters |
 
 The `Transactions` header row must contain the exact names in `REQUIRED_HEADERS` at the top of `Code.gs`. Other columns can remain in place; the script maps by header name.
@@ -29,8 +29,14 @@ Do not place the shared secret in browser code, a `VITE_*` variable, a public do
 
 - `health`: validates access to the configured spreadsheet, `Transactions` tab, expected headers, and Drive folder.
 - `listTransactions`: reads transaction rows, including hidden ones; the PWA keeps hidden rows out of its normal lists.
-- `saveTransaction`: uploads optional evidence, appends a transaction row, and avoids duplicate IDs.
+- `saveTransaction`: writes a recoverable row, uploads and links optional evidence, and resumes retries with the same transaction ID without appending a duplicate.
 - `softDeleteTransaction`: stores the previous status in an additional `สถานะก่อนซ่อน` column and changes the row status to `ลบแล้ว`; it does not remove the row or the evidence file.
 - `restoreMonthTransactions`: restores every hidden row in the selected budget month and returns the refreshed transaction list.
 
 Rows hidden before this restore feature was added do not have a saved previous status, so restoring those rows sets their status to `ยืนยันแล้ว`.
+
+### Receipt storage and retry behavior
+
+Set `DRIVE_FOLDER_ID` to the top-level folder. Evidence is first placed in `99_รอตรวจสอบ`; after the transaction row and Drive link are saved, the script moves it into `01_รายรับ`, `02_รายจ่ายประจำ`, or `03_รายจ่ายผันแปร` according to transaction type and nature. Missing subfolders are created automatically.
+
+When a request includes evidence, the sheet row is written with status `รอตรวจสอบ` before the Drive upload. It changes to `ยืนยันแล้ว` only after the evidence link is saved and the file is moved. If a request fails partway through, retry with the same transaction ID; the script resumes that row and reuses the transaction-named file instead of appending a duplicate.

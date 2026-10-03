@@ -291,8 +291,13 @@ function App() {
       return;
     }
 
+    const transactionId = draft.transactionId || globalThis.crypto?.randomUUID?.() || `TX-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    if (!draft.transactionId) {
+      setDraft((current) => current ? { ...current, transactionId } : current);
+    }
+
     const newTransaction = {
-      id: globalThis.crypto?.randomUUID?.() || `TX-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      id: transactionId,
       date: draft.date,
       budgetMonth: draft.budgetMonth,
       type: draft.type || "expense",
