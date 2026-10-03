@@ -203,7 +203,7 @@ function parseCategory(text) {
     ["บัตรเครดิต", /ชำระบัตรเครดิต|credit\s*card\s*payment/i],
     ["ค่าโทรศัพท์/อินเทอร์เน็ต", /\bais\b|\bdtac\b|\btrue(?:\s*(?:move|online))?\b|ค่าโทรศัพท์|ค่าอินเทอร์เน็ต|internet\s*bill/i],
     ["ค่าสาธารณูปโภค", /การไฟฟ้า|ค่าไฟ|การประปา|ค่าน้ำประปา|electricity\s*bill|water\s*bill/i],
-    ["ค่าเดินทาง", /bts|mrt|grab(?:taxi)?|bolt|taxi|ทางด่วน|น้ำมันเชื้อเพลิง|ค่าทางด่วน/i],
+    ["ค่าเดินทาง", /bts|mrt|grab(?:taxi)?|bolt|taxi|ทางด่วน|น้ำมันเชื้อเพลิง|ค่าทางด่วน|รถเมล์|รถโดยสาร|รถประจำทาง|รถทัวร์|รถไฟฟ้า|ไทย\s*สมายล์\s*บัส|สมายล์\s*บัส|\bsmile\s*bus\b|\bbus\b|\btransit\b/i],
     ["สุขภาพ", /โรงพยาบาล|คลินิก|ร้านขายยา|pharmacy|hospital|clinic/i],
     ["อาหาร", /ร้านอาหาร|อาหาร|ข้าวมันไก่|ข้าวขาหมู|ข้าวแกง|ก๋วยเตี๋ยว|ก๋วยจั๊บ|ผัดไทย|กาแฟ|coffee|restaurant|foodpanda|grabfood|lineman/i],
     ["บ้านและที่พัก", /ค่าเช่าบ้าน|ค่าเช่าห้อง|ค่าเช่าคอนโด|ที่พัก|rent\s*payment/i],
