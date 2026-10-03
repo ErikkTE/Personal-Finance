@@ -65,30 +65,36 @@ export default async function handler(req, res) {
   if (!isSameOriginRequest(req)) return res.status(403).json({ error: "คำขอไม่ถูกต้อง" });
   if (!requireSession(req, res)) return;
 
+  const requestId = randomUUID();
+  let action = "unknown";
   try {
     if (req.method === "GET") {
-      const result = await callAppsScript({ action: "listTransactions" });
+      action = "listTransactions";
+      const result = await callAppsScript({ action, requestId });
       return res.status(200).json({ transactions: result.transactions || [] });
     }
 
     if (req.method === "POST") {
+      action = "saveTransaction";
       const transaction = normalizeTransaction(req.body?.transaction);
       const evidence = normalizeEvidence(req.body?.evidence);
-      const result = await callAppsScript({ action: "saveTransaction", transaction, evidence });
+      const result = await callAppsScript({ action, requestId, transaction, evidence });
       return res.status(201).json({ transaction: result.transaction });
     }
 
     if (req.method === "PATCH") {
+      action = "restoreMonthTransactions";
       const budgetMonth = String(req.body?.budgetMonth || "").trim();
       if (!validMonth(budgetMonth)) return res.status(400).json({ error: "เดือนงบประมาณไม่ถูกต้อง" });
-      const result = await callAppsScript({ action: "restoreMonthTransactions", budgetMonth });
+      const result = await callAppsScript({ action, requestId, budgetMonth });
       return res.status(200).json(result);
     }
 
     if (req.method === "DELETE") {
+      action = "softDeleteTransaction";
       const id = String(req.body?.id || "").trim();
       if (!id || id.length > 80) return res.status(400).json({ error: "ไม่พบรหัสรายการ" });
-      const result = await callAppsScript({ action: "softDeleteTransaction", id });
+      const result = await callAppsScript({ action, requestId, id });
       return res.status(200).json(result);
     }
 
@@ -96,7 +102,18 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: "Method not allowed" });
   } catch (error) {
     const message = error instanceof Error ? error.message : "ไม่สามารถบันทึกรายการได้";
+    const code = String(error?.code || "UPSTREAM_ERROR");
     const validationError = /ไม่ถูกต้อง|กรุณา|รองรับ|ขนาดไม่เกิน|ไม่พบรหัส/.test(message);
-    return res.status(validationError ? 400 : 502).json({ error: validationError ? message : "เชื่อมต่อ Google Sheets/Drive ไม่สำเร็จ" });
+    if (!validationError) console.error("Transactions API request failed", { requestId, action, code });
+    if (code === "TRANSACTION_SAVE_FAILED") {
+      return res.status(502).json({
+        error: "บันทึกไม่ครบ รายการอาจอยู่ในสถานะรอตรวจสอบ กดบันทึกซ้ำเพื่อดำเนินการต่อได้โดยไม่เพิ่มรายการซ้ำ",
+        requestId,
+      });
+    }
+    return res.status(validationError ? 400 : 502).json({
+      error: validationError ? message : "เชื่อมต่อ Google Sheets/Drive ไม่สำเร็จ",
+      ...(validationError ? {} : { requestId }),
+    });
   }
 }

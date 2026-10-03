@@ -18,8 +18,9 @@ const REQUIRED_HEADERS = [
 ];
 
 function doPost(event) {
+  let request = {};
   try {
-    const request = JSON.parse(event && event.postData && event.postData.contents || "{}");
+    request = JSON.parse(event && event.postData && event.postData.contents || "{}");
     const expectedSecret = PropertiesService.getScriptProperties().getProperty("API_SHARED_SECRET") || "";
     if (!expectedSecret || !constantTimeEquals_(String(request.secret || ""), expectedSecret)) {
       return jsonResponse_({ ok: false, error: "Unauthorized" });
@@ -48,7 +49,20 @@ function doPost(event) {
 
     return jsonResponse_({ ok: true, data: data });
   } catch (error) {
-    return jsonResponse_({ ok: false, error: error && error.message ? error.message : "Request failed" });
+    const details = {
+      action: String(request.action || "unknown"),
+      requestId: String(request.requestId || "unknown"),
+      transactionId: String(request.transaction && request.transaction.id || ""),
+      message: String(error && error.message || "Request failed"),
+      stack: String(error && error.stack || "").slice(0, 2000),
+    };
+    console.error(JSON.stringify(details));
+    return jsonResponse_({
+      ok: false,
+      error: request.action === "saveTransaction" ? "Transaction save did not complete" : "Google Apps Script request failed",
+      code: request.action === "saveTransaction" ? "TRANSACTION_SAVE_FAILED" : "APPS_SCRIPT_ERROR",
+      requestId: String(request.requestId || ""),
+    });
   }
 }
 
@@ -95,30 +109,35 @@ function saveTransaction_(input, evidence) {
   if (!Number.isFinite(amount) || amount <= 0 || !name || !category) {
     throw new Error("Transaction data is invalid");
   }
+  const preparedEvidence = evidence ? prepareEvidence_(evidence) : null;
 
   const lock = LockService.getScriptLock();
-  lock.waitLock(15000);
-  let uploadedFile = null;
+  let lockAcquired = false;
   try {
+    lock.waitLock(15000);
+    lockAcquired = true;
+
     const sheet = getTransactionsSheet_();
     const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getDisplayValues()[0];
     const columns = headerIndexes_(headers);
     const id = String(input.id || Utilities.getUuid());
     const existingRow = findTransactionRow_(sheet, columns["Transaction ID"], id);
+    let existing = null;
     if (existingRow > 0) {
-      const existing = transactionFromRow_(sheet.getRange(existingRow, 1, 1, headers.length).getValues()[0], columns);
-      return { transaction: existing, duplicate: true };
+      existing = transactionFromRow_(sheet.getRange(existingRow, 1, 1, headers.length).getValues()[0], columns);
+      if (existing.status === "ลบแล้ว") return { transaction: existing, duplicate: true };
+      if (existing.status !== "รอตรวจสอบ" && (!evidence || existing.evidenceUrl)) {
+        return { transaction: existing, duplicate: true };
+      }
     }
 
-    let evidenceUrl = "";
-    let evidenceName = "";
-    if (evidence) {
-      uploadedFile = saveEvidence_(evidence);
-      evidenceUrl = uploadedFile.getUrl();
-      evidenceName = uploadedFile.getName();
-    }
+    const rowNumber = existingRow > 0 ? existingRow : sheet.getLastRow() + 1;
+    const row = existingRow > 0
+      ? sheet.getRange(rowNumber, 1, 1, headers.length).getValues()[0]
+      : new Array(headers.length).fill("");
+    let evidenceUrl = existing ? existing.evidenceUrl : "";
+    const shouldSyncEvidence = Boolean(evidence) || Boolean(existing && existing.status === "รอตรวจสอบ");
 
-    const row = new Array(headers.length).fill("");
     putCell_(row, columns, "Transaction ID", id);
     putCell_(row, columns, "วันที่เกิดรายการ", Utilities.parseDate(date, "Asia/Bangkok", "yyyy-MM-dd"));
     putCell_(row, columns, "เดือนใช้งาน/งบประมาณ", budgetMonth);
@@ -128,14 +147,35 @@ function saveTransaction_(input, evidence) {
     putCell_(row, columns, "จำนวนเงิน", amount);
     putCell_(row, columns, "ช่องทางจ่าย", String(input.channel || "อื่นๆ"));
     putCell_(row, columns, "ลักษณะรายการ", String(input.nature || "ครั้งเดียว"));
-    putCell_(row, columns, "สถานะ", "ยืนยันแล้ว");
+    putCell_(row, columns, "สถานะ", shouldSyncEvidence ? "รอตรวจสอบ" : "ยืนยันแล้ว");
     putCell_(row, columns, "ลิงก์หลักฐาน Drive", evidenceUrl);
     putCell_(row, columns, "หมายเหตุ", String(input.note || ""));
     putCell_(row, columns, "เดือนรับเงิน", String(input.incomeMonth || ""));
 
-    const newRowNumber = sheet.getLastRow() + 1;
-    sheet.getRange(newRowNumber, 1, 1, row.length).setValues([row]);
-    sheet.getRange(newRowNumber, columns["วันที่เกิดรายการ"] + 1).setNumberFormat("yyyy-mm-dd");
+    // Write a recoverable row before creating the Drive file. A failed upload
+    // will leave a visible pending row instead of an unlinked receipt.
+    sheet.getRange(rowNumber, 1, 1, row.length).setValues([row]);
+    sheet.getRange(rowNumber, columns["วันที่เกิดรายการ"] + 1).setNumberFormat("yyyy-mm-dd");
+
+    if (shouldSyncEvidence) {
+      const rootFolder = getDriveFolder_();
+      const destinationFolder = getEvidenceDestinationFolder_(rootFolder, input);
+      const uploadedFile = preparedEvidence
+        ? saveEvidence_(preparedEvidence, id, rootFolder)
+        : getEvidenceFileFromUrl_(evidenceUrl) || findEvidenceFileByTransactionId_(rootFolder, id);
+      if (!uploadedFile) throw new Error("Pending receipt file was not found");
+
+      evidenceUrl = uploadedFile.getUrl();
+      putCell_(row, columns, "ลิงก์หลักฐาน Drive", evidenceUrl);
+      putCell_(row, columns, "สถานะ", "รอตรวจสอบ");
+      sheet.getRange(rowNumber, 1, 1, row.length).setValues([row]);
+
+      if (!isEvidenceFileInFolder_(uploadedFile, destinationFolder)) uploadedFile.moveTo(destinationFolder);
+      putCell_(row, columns, "สถานะ", "ยืนยันแล้ว");
+      sheet.getRange(rowNumber, 1, 1, row.length).setValues([row]);
+    }
+
+    const savedRow = sheet.getRange(rowNumber, 1, 1, headers.length).getValues()[0];
     return {
       transaction: {
         id: id,
@@ -147,20 +187,15 @@ function saveTransaction_(input, evidence) {
         amount: amount,
         channel: String(input.channel || "อื่นๆ"),
         nature: String(input.nature || "ครั้งเดียว"),
-        status: "ยืนยันแล้ว",
-        evidenceName: evidenceName,
+        status: String(readCell_(savedRow, columns, "สถานะ") || "ยืนยันแล้ว"),
+        evidenceName: evidenceUrl ? "หลักฐานใน Drive" : "",
         evidenceUrl: evidenceUrl,
         note: String(input.note || ""),
         incomeMonth: String(input.incomeMonth || ""),
       },
     };
-  } catch (error) {
-    if (uploadedFile) {
-      try { uploadedFile.setTrashed(true); } catch (ignored) {}
-    }
-    throw error;
   } finally {
-    lock.releaseLock();
+    if (lockAcquired) lock.releaseLock();
   }
 }
 
@@ -242,19 +277,102 @@ function ensurePreviousStatusColumn_(sheet) {
   return lastColumn;
 }
 
-function saveEvidence_(evidence) {
+function prepareEvidence_(evidence) {
   const mimeType = String(evidence.mimeType || "");
   const allowedTypes = ["image/jpeg", "image/png", "image/webp", "image/heic", "image/heif", "application/pdf"];
   const base64 = String(evidence.base64 || "").replace(/^data:[^;]+;base64,/, "");
-  const fileName = String(evidence.fileName || "หลักฐาน").replace(/[\\/\u0000-\u001f]/g, "_").slice(0, 160);
+  const originalName = String(evidence.fileName || "หลักฐาน").replace(/[\\/\u0000-\u001f]/g, "_").slice(0, 140);
   if (allowedTypes.indexOf(mimeType) < 0 || !base64 || base64.length > 4250000) {
     throw new Error("Evidence file is not supported or is too large");
   }
 
   const bytes = Utilities.base64Decode(base64);
   if (bytes.length > 3 * 1024 * 1024) throw new Error("Evidence must be 3 MB or smaller");
-  const blob = Utilities.newBlob(bytes, mimeType, fileName);
-  return getDriveFolder_().createFile(blob);
+  return { mimeType: mimeType, originalName: originalName, bytes: bytes };
+}
+
+function saveEvidence_(evidence, transactionId, rootFolder) {
+  const safeId = String(transactionId || "").replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 80);
+  const fileName = "TX-" + safeId + "__" + evidence.originalName;
+  const existingFile = findEvidenceFile_(rootFolder, fileName) || findEvidenceFileByTransactionId_(rootFolder, safeId);
+  if (existingFile) return existingFile;
+
+  const blob = Utilities.newBlob(evidence.bytes, evidence.mimeType, fileName);
+  return getOrCreateEvidenceFolder_(rootFolder, "99_รอตรวจสอบ").createFile(blob);
+}
+
+function getEvidenceDestinationFolder_(rootFolder, transaction) {
+  if (transaction.type === "income") {
+    return getOrCreateEvidenceFolder_(rootFolder, "01_รายรับ");
+  }
+  if (String(transaction.nature || "").indexOf("ประจำ") >= 0) {
+    return getOrCreateEvidenceFolder_(rootFolder, "02_รายจ่ายประจำ");
+  }
+  if (transaction.type === "expense" && String(transaction.nature || "").indexOf("ครั้งเดียว") >= 0) {
+    return getOrCreateEvidenceFolder_(rootFolder, "03_รายจ่ายผันแปร");
+  }
+  return getOrCreateEvidenceFolder_(rootFolder, "99_รอตรวจสอบ");
+}
+
+function getOrCreateEvidenceFolder_(parentFolder, folderName) {
+  const folders = parentFolder.getFoldersByName(folderName);
+  return folders.hasNext() ? folders.next() : parentFolder.createFolder(folderName);
+}
+
+function findEvidenceFile_(rootFolder, fileName) {
+  const rootFiles = rootFolder.getFilesByName(fileName);
+  if (rootFiles.hasNext()) return rootFiles.next();
+
+  const folderNames = ["01_รายรับ", "02_รายจ่ายประจำ", "03_รายจ่ายผันแปร", "99_รอตรวจสอบ"];
+  for (let index = 0; index < folderNames.length; index += 1) {
+    const folders = rootFolder.getFoldersByName(folderNames[index]);
+    if (!folders.hasNext()) continue;
+    const files = folders.next().getFilesByName(fileName);
+    if (files.hasNext()) return files.next();
+  }
+  return null;
+}
+
+function findEvidenceFileByTransactionId_(rootFolder, transactionId) {
+  const safeId = String(transactionId || "").replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 80);
+  if (!safeId) return null;
+  const prefix = "TX-" + safeId + "__";
+  const folderNames = ["", "01_รายรับ", "02_รายจ่ายประจำ", "03_รายจ่ายผันแปร", "99_รอตรวจสอบ"];
+
+  for (let index = 0; index < folderNames.length; index += 1) {
+    const folderName = folderNames[index];
+    let folder = rootFolder;
+    if (folderName) {
+      const folders = rootFolder.getFoldersByName(folderName);
+      if (!folders.hasNext()) continue;
+      folder = folders.next();
+    }
+    const files = folder.getFiles();
+    while (files.hasNext()) {
+      const file = files.next();
+      if (file.getName().indexOf(prefix) === 0) return file;
+    }
+  }
+  return null;
+}
+
+function getEvidenceFileFromUrl_(url) {
+  const value = String(url || "");
+  const match = value.match(/\/d\/([-A-Za-z0-9_]{20,})/) || value.match(/[?&]id=([-A-Za-z0-9_]{20,})/);
+  if (!match) return null;
+  try {
+    return DriveApp.getFileById(match[1]);
+  } catch (ignored) {
+    return null;
+  }
+}
+
+function isEvidenceFileInFolder_(file, folder) {
+  const parents = file.getParents();
+  while (parents.hasNext()) {
+    if (parents.next().getId() === folder.getId()) return true;
+  }
+  return false;
 }
 
 function transactionFromRow_(row, columns) {
