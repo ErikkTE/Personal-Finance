@@ -1,4 +1,8 @@
 const TAB_TRANSACTIONS = "Transactions";
+const TAB_INSTALLMENTS = "Installments";
+const TAB_INSTALLMENT_PAYMENTS = "Installment Payments";
+const INSTALLMENT_HEADERS = ["Installment ID", "รายการสินค้า", "ราคาสินค้า", "ดอกเบี้ยรวม (%)", "จำนวนเดือน", "ธนาคาร", "เดือนเริ่มชำระ", "ยอดรวม", "วันที่บันทึก"];
+const INSTALLMENT_PAYMENT_HEADERS = ["Installment ID", "งวดที่", "เดือนครบกำหนด", "จำนวนเงิน", "ชำระแล้ว", "วันที่ชำระ"];
 const PREVIOUS_STATUS_HEADER = "สถานะก่อนซ่อน";
 const RESTORABLE_STATUSES = ["ยืนยันแล้ว", "รอตรวจสอบ"];
 const REQUIRED_HEADERS = [
@@ -43,6 +47,15 @@ function doPost(event) {
       case "saveTransaction":
         data = saveTransaction_(request.transaction, request.evidence);
         break;
+      case "listInstallments":
+        data = { installments: listInstallments_() };
+        break;
+      case "saveInstallment":
+        data = saveInstallment_(request.installment);
+        break;
+      case "setInstallmentPayment":
+        data = setInstallmentPayment_(request.id, request.installmentNumber, request.paid);
+        break;
       case "softDeleteTransaction":
         data = softDeleteTransaction_(request.id);
         break;
@@ -56,6 +69,7 @@ function doPost(event) {
       action: String(request.action || "unknown"),
       requestId: String(request.requestId || "unknown"),
       transactionId: String(request.transaction && request.transaction.id || ""),
+      installmentId: String(request.installment && request.installment.id || request.id || ""),
       message: String(error && error.message || "Request failed"),
       stack: String(error && error.stack || "").slice(0, 2000),
     };
@@ -128,6 +142,239 @@ function getTransactionEvidence_(transactionId) {
     fileName: file.getName(),
     base64: Utilities.base64Encode(bytes),
   };
+}
+
+function listInstallments_() {
+  const spreadsheet = getSpreadsheet_();
+  const installmentSheet = spreadsheet.getSheetByName(TAB_INSTALLMENTS);
+  const paymentSheet = spreadsheet.getSheetByName(TAB_INSTALLMENT_PAYMENTS);
+  if (!installmentSheet && !paymentSheet) return [];
+  if (!installmentSheet || !paymentSheet) throw new Error("Installment sheets are incomplete");
+  validateTableHeaders_(installmentSheet, INSTALLMENT_HEADERS, "Installments");
+  validateTableHeaders_(paymentSheet, INSTALLMENT_PAYMENT_HEADERS, "Installment Payments");
+
+  const plansLastRow = installmentSheet.getLastRow();
+  if (plansLastRow < 2) return [];
+  const planHeaders = installmentSheet.getRange(1, 1, 1, installmentSheet.getLastColumn()).getDisplayValues()[0];
+  const planColumns = columnIndexes_(planHeaders, INSTALLMENT_HEADERS, "Installments");
+  const planRows = installmentSheet.getRange(2, 1, plansLastRow - 1, planHeaders.length).getValues();
+
+  const paymentsByPlan = {};
+  const paymentsLastRow = paymentSheet.getLastRow();
+  if (paymentsLastRow > 1) {
+    const paymentHeaders = paymentSheet.getRange(1, 1, 1, paymentSheet.getLastColumn()).getDisplayValues()[0];
+    const paymentColumns = columnIndexes_(paymentHeaders, INSTALLMENT_PAYMENT_HEADERS, "Installment Payments");
+    const paymentRows = paymentSheet.getRange(2, 1, paymentsLastRow - 1, paymentHeaders.length).getValues();
+    paymentRows.forEach(function (row) {
+      const id = String(readCell_(row, paymentColumns, "Installment ID") || "");
+      if (!id) return;
+      if (!paymentsByPlan[id]) paymentsByPlan[id] = [];
+      const paidValue = readCell_(row, paymentColumns, "ชำระแล้ว");
+      paymentsByPlan[id].push({
+        installmentNumber: Number(readCell_(row, paymentColumns, "งวดที่") || 0),
+        month: monthToIso_(readCell_(row, paymentColumns, "เดือนครบกำหนด")),
+        amount: Number(readCell_(row, paymentColumns, "จำนวนเงิน") || 0),
+        paid: paidValue === true || String(paidValue).toLowerCase() === "true" || String(paidValue) === "ชำระแล้ว",
+        paidAt: dateToIso_(readCell_(row, paymentColumns, "วันที่ชำระ")),
+      });
+    });
+  }
+
+  return planRows.map(function (row) {
+    const id = String(readCell_(row, planColumns, "Installment ID") || "");
+    return installmentFromRow_(row, planColumns, paymentsByPlan[id] || []);
+  }).filter(function (plan) {
+    return Boolean(plan.id);
+  }).reverse();
+}
+
+function saveInstallment_(input) {
+  if (!input || typeof input !== "object") throw new Error("Installment is required");
+  const id = String(input.id || "").trim();
+  const name = String(input.name || "").trim().slice(0, 120);
+  const price = Number(input.price);
+  const interestRate = Number(input.interestRate || 0);
+  const months = Number(input.months);
+  const bank = String(input.bank || "");
+  const startMonth = String(input.startMonth || "");
+  const schedule = Array.isArray(input.schedule) ? input.schedule : [];
+  if (!/^[A-Za-z0-9_-]{8,80}$/.test(id) || !name || !Number.isFinite(price) || price <= 0 || price > 100000000) {
+    throw new Error("Installment data is invalid");
+  }
+  if (!Number.isFinite(interestRate) || interestRate < 0 || interestRate > 100 || !Number.isInteger(months) || months < 1 || months > 60) {
+    throw new Error("Installment interest or term is invalid");
+  }
+  if (["กสิกรไทย", "SCB", "UOB"].indexOf(bank) < 0 || !/^\d{4}-(0[1-9]|1[0-2])$/.test(startMonth) || schedule.length !== months) {
+    throw new Error("Installment bank, month or schedule is invalid");
+  }
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(15000);
+  try {
+    const sheets = ensureInstallmentSheets_();
+    const master = sheets.master;
+    const payments = sheets.payments;
+    const masterHeaders = master.getRange(1, 1, 1, master.getLastColumn()).getDisplayValues()[0];
+    const masterColumns = columnIndexes_(masterHeaders, INSTALLMENT_HEADERS, "Installments");
+    const existingRow = findInstallmentRow_(master, masterColumns["Installment ID"], id);
+    const rowNumber = existingRow > 0 ? existingRow : Math.max(master.getLastRow() + 1, 2);
+    ensureSheetRowCapacity_(master, rowNumber);
+    const masterRow = existingRow > 0
+      ? master.getRange(rowNumber, 1, 1, masterHeaders.length).getValues()[0]
+      : new Array(masterHeaders.length).fill("");
+    putCell_(masterRow, masterColumns, "Installment ID", id);
+    putCell_(masterRow, masterColumns, "รายการสินค้า", name);
+    putCell_(masterRow, masterColumns, "ราคาสินค้า", price);
+    putCell_(masterRow, masterColumns, "ดอกเบี้ยรวม (%)", interestRate);
+    putCell_(masterRow, masterColumns, "จำนวนเดือน", months);
+    putCell_(masterRow, masterColumns, "ธนาคาร", bank);
+    putCell_(masterRow, masterColumns, "เดือนเริ่มชำระ", startMonth);
+    putCell_(masterRow, masterColumns, "ยอดรวม", Number(input.totalAmount || price * (1 + interestRate / 100)));
+    if (!existingRow) putCell_(masterRow, masterColumns, "วันที่บันทึก", new Date());
+    master.getRange(rowNumber, 1, 1, masterRow.length).setValues([masterRow]);
+
+    const paymentHeaders = payments.getRange(1, 1, 1, payments.getLastColumn()).getDisplayValues()[0];
+    const paymentColumns = columnIndexes_(paymentHeaders, INSTALLMENT_PAYMENT_HEADERS, "Installment Payments");
+    const existingPayments = readInstallmentPaymentRows_(payments, paymentColumns, id);
+    schedule.forEach(function (payment, index) {
+      const installmentNumber = Number(payment.installmentNumber || index + 1);
+      const oldPayment = existingPayments[installmentNumber];
+      const targetRow = oldPayment ? oldPayment.rowNumber : Math.max(payments.getLastRow() + 1, 2);
+      ensureSheetRowCapacity_(payments, targetRow);
+      const paymentRow = oldPayment
+        ? payments.getRange(targetRow, 1, 1, paymentHeaders.length).getValues()[0]
+        : new Array(paymentHeaders.length).fill("");
+      const dueMonth = String(payment.month || "");
+      const amount = Number(payment.amount);
+      if (!Number.isInteger(installmentNumber) || installmentNumber < 1 || installmentNumber > months || !/^\d{4}-(0[1-9]|1[0-2])$/.test(dueMonth) || !Number.isFinite(amount) || amount < 0) {
+        throw new Error("Installment payment row is invalid");
+      }
+      putCell_(paymentRow, paymentColumns, "Installment ID", id);
+      putCell_(paymentRow, paymentColumns, "งวดที่", installmentNumber);
+      putCell_(paymentRow, paymentColumns, "เดือนครบกำหนด", dueMonth);
+      putCell_(paymentRow, paymentColumns, "จำนวนเงิน", amount);
+      if (!oldPayment) {
+        putCell_(paymentRow, paymentColumns, "ชำระแล้ว", false);
+        putCell_(paymentRow, paymentColumns, "วันที่ชำระ", "");
+      }
+      payments.getRange(targetRow, 1, 1, paymentRow.length).setValues([paymentRow]);
+    });
+    const savedPlan = getInstallmentById_(id);
+    return { installment: savedPlan };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function setInstallmentPayment_(id, installmentNumber, paid) {
+  const planId = String(id || "").trim();
+  const number = Number(installmentNumber);
+  if (!/^[A-Za-z0-9_-]{8,80}$/.test(planId) || !Number.isInteger(number) || number < 1 || typeof paid !== "boolean") {
+    throw new Error("Installment payment request is invalid");
+  }
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(15000);
+  try {
+    const spreadsheet = getSpreadsheet_();
+    const paymentSheet = spreadsheet.getSheetByName(TAB_INSTALLMENT_PAYMENTS);
+    if (!paymentSheet) throw new Error("Installment payment sheet was not found");
+    validateTableHeaders_(paymentSheet, INSTALLMENT_PAYMENT_HEADERS, "Installment Payments");
+    const headers = paymentSheet.getRange(1, 1, 1, paymentSheet.getLastColumn()).getDisplayValues()[0];
+    const columns = columnIndexes_(headers, INSTALLMENT_PAYMENT_HEADERS, "Installment Payments");
+    const payment = readInstallmentPaymentRows_(paymentSheet, columns, planId)[number];
+    if (!payment) throw new Error("Installment payment was not found");
+    paymentSheet.getRange(payment.rowNumber, columns["ชำระแล้ว"] + 1).setValue(paid);
+    paymentSheet.getRange(payment.rowNumber, columns["วันที่ชำระ"] + 1).setValue(paid ? new Date() : "");
+    return { installment: getInstallmentById_(planId) };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function getInstallmentById_(id) {
+  const plans = listInstallments_();
+  const plan = plans.filter(function (item) { return item.id === id; })[0];
+  if (!plan) throw new Error("Installment was not found after saving");
+  return plan;
+}
+
+function installmentFromRow_(row, columns, schedule) {
+  const price = Number(readCell_(row, columns, "ราคาสินค้า") || 0);
+  const interestRate = Number(readCell_(row, columns, "ดอกเบี้ยรวม (%)") || 0);
+  const months = Number(readCell_(row, columns, "จำนวนเดือน") || 0);
+  return {
+    id: String(readCell_(row, columns, "Installment ID") || ""),
+    name: String(readCell_(row, columns, "รายการสินค้า") || ""),
+    price: price,
+    interestRate: interestRate,
+    months: months,
+    bank: String(readCell_(row, columns, "ธนาคาร") || ""),
+    startMonth: monthToIso_(readCell_(row, columns, "เดือนเริ่มชำระ")),
+    totalAmount: Number(readCell_(row, columns, "ยอดรวม") || price * (1 + interestRate / 100)),
+    createdAt: dateToIso_(readCell_(row, columns, "วันที่บันทึก")),
+    schedule: schedule.sort(function (left, right) { return left.installmentNumber - right.installmentNumber; }),
+  };
+}
+
+function ensureInstallmentSheets_() {
+  const spreadsheet = getSpreadsheet_();
+  let master = spreadsheet.getSheetByName(TAB_INSTALLMENTS);
+  let payments = spreadsheet.getSheetByName(TAB_INSTALLMENT_PAYMENTS);
+  if (!master) master = spreadsheet.insertSheet(TAB_INSTALLMENTS);
+  if (!payments) payments = spreadsheet.insertSheet(TAB_INSTALLMENT_PAYMENTS);
+  ensureTableHeaders_(master, INSTALLMENT_HEADERS, "Installments");
+  ensureTableHeaders_(payments, INSTALLMENT_PAYMENT_HEADERS, "Installment Payments");
+  return { master: master, payments: payments };
+}
+
+function ensureTableHeaders_(sheet, expectedHeaders, label) {
+  if (sheet.getLastColumn() === 0) {
+    sheet.getRange(1, 1, 1, expectedHeaders.length).setValues([expectedHeaders]);
+    sheet.setFrozenRows(1);
+    return;
+  }
+  validateTableHeaders_(sheet, expectedHeaders, label);
+}
+
+function validateTableHeaders_(sheet, expectedHeaders, label) {
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getDisplayValues()[0];
+  const missing = expectedHeaders.filter(function (header) { return headers.indexOf(header) < 0; });
+  if (missing.length) throw new Error(label + " headers do not match the expected schema");
+}
+
+function columnIndexes_(headers, expectedHeaders, label) {
+  const columns = {};
+  expectedHeaders.forEach(function (header) {
+    const index = headers.indexOf(header);
+    if (index < 0) throw new Error(label + " headers do not match the expected schema");
+    columns[header] = index;
+  });
+  return columns;
+}
+
+function findInstallmentRow_(sheet, idColumn, id) {
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return -1;
+  const values = sheet.getRange(2, idColumn + 1, lastRow - 1, 1).getDisplayValues();
+  for (let index = 0; index < values.length; index += 1) {
+    if (String(values[index][0]) === id) return index + 2;
+  }
+  return -1;
+}
+
+function readInstallmentPaymentRows_(sheet, columns, id) {
+  const found = {};
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return found;
+  const width = sheet.getLastColumn();
+  const rows = sheet.getRange(2, 1, lastRow - 1, width).getValues();
+  rows.forEach(function (row, index) {
+    if (String(readCell_(row, columns, "Installment ID") || "") !== id) return;
+    const number = Number(readCell_(row, columns, "งวดที่") || 0);
+    if (number > 0) found[number] = { rowNumber: index + 2, row: row };
+  });
+  return found;
 }
 
 function saveTransaction_(input, evidence) {

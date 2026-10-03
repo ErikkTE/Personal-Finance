@@ -14,12 +14,23 @@ import {
   initialTransactions,
 } from "./data";
 import {
+  addMonths,
+  currentInstallmentMonth,
+  installmentBanks,
+  installmentMonthLabel,
+  prepareInstallmentPlan,
+  summarizeInstallments,
+} from "./installments";
+import {
   checkSession,
   getGoogleStatus,
   listTransactions,
   removeTransaction as removeGoogleTransaction,
   restoreHiddenTransactions as restoreGoogleHiddenTransactions,
   getEvidencePreview,
+  listInstallments as listGoogleInstallments,
+  saveInstallment as saveGoogleInstallment,
+  setInstallmentPayment as setGoogleInstallmentPayment,
   saveTransaction as saveGoogleTransaction,
   signIn,
   signOut,
@@ -30,8 +41,18 @@ const navItems = [
   { key: "overview", label: "ภาพรวม", icon: "grid" },
   { key: "upload", label: "อัปโหลดสลิป", icon: "upload" },
   { key: "history", label: "ประวัติรายการ", icon: "list" },
+  { key: "installments", label: "ผ่อนสินค้า", icon: "card" },
   { key: "coach", label: "คำแนะนำ AI", icon: "sparkles" },
 ];
+
+function loadSavedInstallments() {
+  try {
+    const saved = window.localStorage.getItem("personal-finance-installments");
+    return saved ? JSON.parse(saved).map(prepareInstallmentPlan) : [];
+  } catch {
+    return [];
+  }
+}
 
 function loadSavedTransactions() {
   try {
@@ -58,6 +79,11 @@ function App() {
   const [activeView, setActiveView] = useState("overview");
   const [selectedMonth, setSelectedMonth] = useState(getCurrentMonthValue);
   const [transactions, setTransactions] = useState([]);
+  const [installments, setInstallments] = useState([]);
+  const [installmentMonth, setInstallmentMonth] = useState(currentInstallmentMonth);
+  const [installmentSync, setInstallmentSync] = useState({ ready: false, error: "กำลังตรวจการเชื่อมต่อ" });
+  const [savingInstallment, setSavingInstallment] = useState(false);
+  const [updatingPayment, setUpdatingPayment] = useState("");
   const [hiddenTransactions, setHiddenTransactions] = useState([]);
   const [draft, setDraft] = useState(null);
   const [toast, setToast] = useState("");
@@ -111,6 +137,8 @@ function App() {
 
     function enterDemoMode() {
       setTransactions(loadSavedTransactions());
+      setInstallments(loadSavedInstallments());
+      setInstallmentSync({ ready: false, error: "โหมดทดลองบันทึกข้อมูลเฉพาะอุปกรณ์นี้" });
       setHiddenTransactions([]);
       setConnection({ mode: "local", state: "demo" });
       setRuntime({ status: "ready", mode: "local" });
@@ -129,6 +157,16 @@ function App() {
       }
     }
   }, [transactions, runtime.status, runtime.mode]);
+
+  useEffect(() => {
+    if (runtime.status === "ready" && runtime.mode === "local") {
+      try {
+        window.localStorage.setItem("personal-finance-installments", JSON.stringify(installments));
+      } catch {
+        setToast("พื้นที่เก็บข้อมูลแผนผ่อนในอุปกรณ์นี้เต็ม");
+      }
+    }
+  }, [installments, runtime.status, runtime.mode]);
 
   useEffect(() => {
     if (!toast) return undefined;
@@ -161,6 +199,14 @@ function App() {
     const [health, remoteTransactions] = await Promise.all([getGoogleStatus(), listTransactions()]);
     setTransactions(remoteTransactions.filter((item) => item.status !== "ลบแล้ว"));
     setHiddenTransactions(remoteTransactions.filter((item) => item.status === "ลบแล้ว"));
+    try {
+      const remoteInstallments = await listGoogleInstallments();
+      setInstallments(remoteInstallments.map(prepareInstallmentPlan));
+      setInstallmentSync({ ready: true, error: "" });
+    } catch (error) {
+      setInstallments([]);
+      setInstallmentSync({ ready: false, error: error.message || "Apps Script ยังไม่รองรับข้อมูลผ่อนชำระ" });
+    }
     setConnection({ mode: "google", state: "connected", ...health });
     setRuntime({ status: "ready", mode: "google" });
   }
@@ -186,6 +232,8 @@ function App() {
     try { await signOut(); } catch { /* The local session still returns to the sign-in screen. */ }
     setTransactions([]);
     setHiddenTransactions([]);
+    setInstallments([]);
+    setInstallmentSync({ ready: false, error: "กรุณาเข้าสู่ระบบเพื่อโหลดข้อมูลผ่อนชำระ" });
     setShowSettings(false);
     setConnection({ mode: "google", state: "locked" });
     setRuntime({ status: "login", mode: "google" });
@@ -197,6 +245,70 @@ function App() {
     } catch (error) {
       setConnection({ mode: "google", state: "error", message: error.message });
       setRuntime({ status: "error", mode: "google" });
+    }
+  }
+
+  async function retryInstallmentSync() {
+    if (runtime.mode !== "google") return;
+    setInstallmentSync({ ready: false, error: "กำลังโหลดจาก Google Sheets" });
+    try {
+      const remoteInstallments = await listGoogleInstallments();
+      setInstallments(remoteInstallments.map(prepareInstallmentPlan));
+      setInstallmentSync({ ready: true, error: "" });
+    } catch (error) {
+      setInstallmentSync({ ready: false, error: error.message || "Apps Script ยังไม่รองรับข้อมูลผ่อนชำระ" });
+    }
+  }
+
+  async function createInstallment(input) {
+    if (runtime.mode === "google" && !installmentSync.ready) {
+      setToast("ยังบันทึกข้ามอุปกรณ์ไม่ได้ กรุณาอัปเดต Apps Script ให้รองรับข้อมูลผ่อนก่อน");
+      return false;
+    }
+    const plan = prepareInstallmentPlan(input);
+    setSavingInstallment(true);
+    try {
+      const saved = runtime.mode === "google" ? await saveGoogleInstallment(plan) : plan;
+      const normalized = prepareInstallmentPlan(saved);
+      setInstallments((current) => [normalized, ...current.filter((item) => item.id !== normalized.id)]);
+      setToast(runtime.mode === "google" ? "บันทึกแผนผ่อนและตารางงวดไป Google Sheets แล้ว" : "บันทึกแผนผ่อนไว้ในอุปกรณ์นี้แล้ว");
+      return true;
+    } catch (error) {
+      setToast(error.message || "บันทึกแผนผ่อนไม่สำเร็จ");
+      return false;
+    } finally {
+      setSavingInstallment(false);
+    }
+  }
+
+  async function toggleInstallmentPayment(planId, installmentNumber, paid) {
+    const key = `${planId}:${installmentNumber}`;
+    if (updatingPayment) return;
+    if (runtime.mode === "google" && !installmentSync.ready) {
+      setToast("ยังเปลี่ยนสถานะชำระไม่ได้ กรุณาอัปเดต Apps Script ก่อน");
+      return;
+    }
+    const originalPlans = installments;
+    setUpdatingPayment(key);
+    setInstallments((current) => current.map((plan) => plan.id !== planId ? plan : {
+      ...plan,
+      schedule: plan.schedule.map((payment) => payment.installmentNumber !== installmentNumber ? payment : {
+        ...payment,
+        paid,
+        paidAt: paid ? new Date().toISOString() : "",
+      }),
+    }));
+    try {
+      if (runtime.mode === "google") {
+        const saved = await setGoogleInstallmentPayment({ id: planId, installmentNumber, paid });
+        setInstallments((current) => current.map((plan) => plan.id === planId ? prepareInstallmentPlan(saved) : plan));
+      }
+      setToast(paid ? "ทำเครื่องหมายว่าชำระงวดนี้แล้ว" : "ยกเลิกสถานะชำระของงวดนี้แล้ว");
+    } catch (error) {
+      setInstallments(originalPlans);
+      setToast(error.message || "อัปเดตสถานะชำระไม่สำเร็จ");
+    } finally {
+      setUpdatingPayment("");
     }
   }
 
@@ -465,6 +577,22 @@ function App() {
               onRestoreMonth={restoreHiddenForMonth}
             />
           )}
+          {activeView === "installments" && (
+            <InstallmentsView
+              plans={installments}
+              month={installmentMonth}
+              onMonthChange={setInstallmentMonth}
+              storageMode={runtime.mode}
+              syncReady={installmentSync.ready}
+              syncError={installmentSync.error}
+              onRetrySync={retryInstallmentSync}
+              saving={savingInstallment}
+              updatingPayment={updatingPayment}
+              onCreate={createInstallment}
+              onTogglePayment={toggleInstallmentPayment}
+              onSettings={() => setShowSettings(true)}
+            />
+          )}
           {activeView === "coach" && <CoachView summary={summary} selectedMonth={selectedMonth} />}
         </main>
       </div>
@@ -572,7 +700,7 @@ function MobileNav({ activeView, onNavigate }) {
       {navItems.map((item) => (
         <button key={item.key} className={activeView === item.key ? "active" : ""} onClick={() => onNavigate(item.key)} aria-label={item.label} aria-current={activeView === item.key ? "page" : undefined}>
           <Icon name={item.icon} size={20} />
-          <span>{item.key === "upload" ? "อัปโหลด" : item.label.replace("คำแนะนำ AI", "AI")}</span>
+          <span>{({ overview: "ภาพรวม", upload: "อัปโหลด", history: "ประวัติ", installments: "ผ่อนสินค้า", coach: "AI" })[item.key]}</span>
         </button>
       ))}
     </nav>
@@ -594,14 +722,18 @@ function Topbar({ activeView, selectedMonth, monthChoices, connection, onMonthCh
         </button>
         <button className="icon-button settings-button" type="button" aria-label="ตั้งค่าและการเชื่อมต่อ" onClick={onSettings}><Icon name="settings" size={19} /></button>
       </div>
-      <div className="month-control">
-        <button className="icon-button small" aria-label="เดือนก่อนหน้า" disabled={monthIndex <= 0} onClick={() => onMonthChange(monthChoices[Math.max(0, monthIndex - 1)].value)}><Icon name="chevronLeft" size={18} /></button>
-        <select value={selectedMonth} onChange={(event) => onMonthChange(event.target.value)} aria-label="เลือกเดือนงบประมาณ">
-          {monthChoices.map((month) => <option key={month.value} value={month.value}>{month.label}</option>)}
-        </select>
-        <button className="icon-button small" aria-label="เดือนถัดไป" disabled={monthIndex >= monthChoices.length - 1} onClick={() => onMonthChange(monthChoices[Math.min(monthChoices.length - 1, monthIndex + 1)].value)}><Icon name="chevronRight" size={18} /></button>
-      </div>
-      <button className="top-upload" onClick={onUpload}><Icon name="upload" size={17} />อัปโหลดสลิป</button>
+      {activeView !== "installments" && (
+        <>
+          <div className="month-control">
+            <button className="icon-button small" aria-label="เดือนก่อนหน้า" disabled={monthIndex <= 0} onClick={() => onMonthChange(monthChoices[Math.max(0, monthIndex - 1)].value)}><Icon name="chevronLeft" size={18} /></button>
+            <select value={selectedMonth} onChange={(event) => onMonthChange(event.target.value)} aria-label="เลือกเดือนงบประมาณ">
+              {monthChoices.map((month) => <option key={month.value} value={month.value}>{month.label}</option>)}
+            </select>
+            <button className="icon-button small" aria-label="เดือนถัดไป" disabled={monthIndex >= monthChoices.length - 1} onClick={() => onMonthChange(monthChoices[Math.min(monthChoices.length - 1, monthIndex + 1)].value)}><Icon name="chevronRight" size={18} /></button>
+          </div>
+          <button className="top-upload" onClick={onUpload}><Icon name="upload" size={17} />อัปโหลดสลิป</button>
+        </>
+      )}
     </header>
   );
 }
@@ -761,6 +893,209 @@ function HistoryView({ transactions, selectedMonth, connection, onSelectTransact
         <TransactionTable transactions={filtered} onSelect={onSelectTransaction} />
       </section>
       <div className="history-footnote"><Icon name="info" size={16} /><span>{connection.mode === "google" ? "ข้อมูลนี้โหลดจาก Google Sheets รายการที่ซ่อนจากแอปยังคงอยู่ในชีต" : "ข้อมูลทดลองบันทึกไว้ในอุปกรณ์นี้เท่านั้น ยังไม่ได้ส่งไป Google Sheets/Drive"}</span>{filtered.length > 0 && <button className="danger-link" onClick={() => window.confirm(connection.mode === "google" ? "ซ่อนรายการล่าสุดจากแอปหรือไม่? แถวข้อมูลจะยังคงอยู่ใน Google Sheets" : "ลบรายการทดลองล่าสุดออกจากอุปกรณ์นี้หรือไม่?") && onRemove(filtered[0].id)}>{connection.mode === "google" ? "ซ่อนรายการล่าสุด" : "ลบรายการล่าสุด"}</button>}</div>
+    </div>
+  );
+}
+
+function InstallmentsView({ plans, month, onMonthChange, storageMode, syncReady, syncError, onRetrySync, saving, updatingPayment, onCreate, onTogglePayment, onSettings }) {
+  const [formOpen, setFormOpen] = useState(false);
+  const summary = summarizeInstallments(plans, month);
+  const canSave = storageMode !== "google" || syncReady;
+
+  return (
+    <div className="page-stack installment-page">
+      <section className="page-intro">
+        <div>
+          <span className="installment-kicker"><Icon name="card" size={15} />จัดการแผนชำระ</span>
+          <h2>ผ่อนสินค้าด้วยบัตรเครดิต</h2>
+          <p>ดูยอดที่ต้องจ่ายแต่ละเดือน และทำเครื่องหมายเมื่อชำระแล้ว</p>
+        </div>
+        <button className="primary-button installment-add-button" type="button" onClick={() => setFormOpen(true)} disabled={!canSave} title={!canSave ? "อัปเดตการเชื่อมต่อก่อนบันทึกแผนผ่อน" : undefined}>
+          <Icon name="plus" size={18} />เพิ่มรายการผ่อน
+        </button>
+      </section>
+
+      {storageMode === "google" && !syncReady && (
+        <section className="installment-sync-notice" role="status">
+          <span className="installment-sync-icon"><Icon name="info" size={18} /></span>
+          <div><strong>ยังซิงก์ข้อมูลผ่อนไม่ได้</strong><span>{syncError || "ตรวจสอบ Apps Script แล้วลองโหลดใหม่"}</span></div>
+          <button className="secondary-button" type="button" onClick={onRetrySync}>ลองเชื่อมต่ออีกครั้ง</button>
+        </section>
+      )}
+      {storageMode !== "google" && (
+        <section className="installment-sync-notice local" role="status">
+          <span className="installment-sync-icon"><Icon name="info" size={18} /></span>
+          <div><strong>ข้อมูลทดลองในอุปกรณ์นี้</strong><span>ลงชื่อเข้าใช้ Google เพื่อซิงก์แผนผ่อนและสถานะชำระกับอุปกรณ์อื่น</span></div>
+          <button className="secondary-button" type="button" onClick={onSettings}>การเชื่อมต่อ</button>
+        </section>
+      )}
+
+      <section className="installment-month-panel panel" aria-label="เลือกเดือนสรุป">
+        <div className="installment-month-heading">
+          <span className="installment-month-icon"><Icon name="calendar" size={19} /></span>
+          <div><small>สรุปงวดประจำเดือน</small><strong>{installmentMonthLabel(month)}</strong></div>
+        </div>
+        <div className="installment-month-controls">
+          <button className="icon-button" type="button" aria-label="ดูเดือนก่อนหน้า" onClick={() => onMonthChange(addMonths(month, -1))}><Icon name="chevronLeft" size={18} /></button>
+          <button className="icon-button" type="button" aria-label="ดูเดือนถัดไป" onClick={() => onMonthChange(addMonths(month, 1))}><Icon name="chevronRight" size={18} /></button>
+        </div>
+      </section>
+
+      <section className="metric-grid installment-metrics" aria-label="สรุปแผนผ่อน">
+        <MetricCard label="ต้องจ่ายเดือนนี้" value={`฿ ${formatNumber(summary.dueAmount)}`} detail={`${summary.dueCount} งวดใน ${installmentMonthLabel(month, { short: true })}`} icon="calendar" tone="blue" />
+        <MetricCard label="ชำระแล้วเดือนนี้" value={`${summary.paidThisMonth} / ${summary.dueCount} งวด`} detail={summary.dueCount ? "แตะสถานะในตารางเพื่อเปลี่ยน" : "ไม่มีงวดในเดือนนี้"} icon="check" tone="green" />
+        <MetricCard label="ยอดคงเหลือทั้งหมด" value={`฿ ${formatNumber(summary.outstandingAmount)}`} detail={`ยังไม่ชำระ ${summary.paymentCount - summary.paidCount} จาก ${summary.paymentCount} งวด`} icon="wallet" tone="amber" />
+      </section>
+
+      {plans.length ? (
+        <section className="installment-plan-list" aria-label="รายการผ่อนสินค้า">
+          {plans.map((plan, index) => (
+            <InstallmentPlanCard
+              key={plan.id}
+              plan={plan}
+              index={index}
+              updatingPayment={updatingPayment}
+              onTogglePayment={onTogglePayment}
+            />
+          ))}
+        </section>
+      ) : (
+        <section className="installment-empty panel">
+          <div className="installment-empty-icon"><Icon name="card" size={25} /></div>
+          <strong>ยังไม่มีรายการผ่อน</strong>
+          <span>เพิ่มสินค้าใบแรก แล้วระบบจะสร้างตารางยอดชำระรายเดือนให้</span>
+          <button className="secondary-button" type="button" onClick={() => setFormOpen(true)} disabled={!canSave}><Icon name="plus" size={16} />เพิ่มรายการผ่อน</button>
+        </section>
+      )}
+
+      {formOpen && <InstallmentFormModal saving={saving} onClose={() => setFormOpen(false)} onSave={async (form) => {
+        const saved = await onCreate(form);
+        if (saved) setFormOpen(false);
+      }} />}
+    </div>
+  );
+}
+
+function InstallmentPlanCard({ plan, index, updatingPayment, onTogglePayment }) {
+  const [expanded, setExpanded] = useState(index === 0);
+  const bank = installmentBanks.find((item) => item.value === plan.bank) || installmentBanks[0];
+  const paidCount = plan.schedule.filter((payment) => payment.paid).length;
+  const progress = plan.schedule.length ? Math.round((paidCount / plan.schedule.length) * 100) : 0;
+  const monthlyAmount = plan.schedule[0]?.amount || 0;
+
+  return (
+    <article className="installment-plan-card panel" style={{ "--plan-index": index }}>
+      <div className="installment-plan-head">
+        <div className={`installment-bank-mark bank-${bank.tone}`} aria-label={bank.label}>{bank.short}</div>
+        <div className="installment-plan-title">
+          <span className="installment-plan-bank">{bank.label} · {plan.months} เดือน · เริ่ม {installmentMonthLabel(plan.startMonth, { short: true })}</span>
+          <h3>{plan.name}</h3>
+          <span className="installment-plan-price">ราคาสินค้า ฿ {formatNumber(plan.price)}{plan.interestRate ? ` · ดอกเบี้ยรวม ${plan.interestRate}%` : " · ดอกเบี้ย 0%"}</span>
+        </div>
+        <div className="installment-plan-amount"><strong>฿ {formatNumber(monthlyAmount)}</strong><span>ค่างวดต่อเดือน</span></div>
+        <button className={`icon-button installment-expand ${expanded ? "is-expanded" : ""}`} type="button" aria-label={expanded ? "ซ่อนตารางงวด" : "แสดงตารางงวด"} aria-expanded={expanded} onClick={() => setExpanded((value) => !value)}><Icon name="chevronRight" size={18} /></button>
+      </div>
+      <div className="installment-progress-row">
+        <div className="installment-progress-track"><span style={{ width: `${progress}%` }} /></div>
+        <span>{paidCount} / {plan.schedule.length} งวด ({progress}%)</span>
+        <strong>ยอดรวม ฿ {formatNumber(plan.totalAmount)}</strong>
+      </div>
+      {expanded && (
+        <div className="installment-schedule-wrap">
+          <div className="installment-schedule-title"><div><h4>ตารางชำระรายเดือน</h4><span>ยอดงวดสุดท้ายปรับสตางค์ให้ยอดรวมตรงกับราคาและดอกเบี้ย</span></div></div>
+          <div className="installment-schedule-table" role="table" aria-label={`ตารางผ่อน ${plan.name}`}>
+            <div className="installment-schedule-row installment-schedule-head" role="row"><span role="columnheader">งวด</span><span role="columnheader">เดือน</span><span role="columnheader">จำนวนเงิน</span><span role="columnheader">สถานะ</span></div>
+            {plan.schedule.map((payment) => {
+              const key = `${plan.id}:${payment.installmentNumber}`;
+              const isUpdating = updatingPayment === key;
+              return (
+                <div className={`installment-schedule-row ${payment.paid ? "paid" : ""}`} role="row" key={payment.installmentNumber}>
+                  <span data-label="งวด" role="cell">งวดที่ {payment.installmentNumber}</span>
+                  <span data-label="เดือน" role="cell">{installmentMonthLabel(payment.month)}</span>
+                  <strong data-label="จำนวนเงิน" role="cell">฿ {formatNumber(payment.amount)}</strong>
+                  <span data-label="สถานะ" role="cell">
+                    <button className={`payment-toggle ${payment.paid ? "is-paid" : ""}`} type="button" disabled={Boolean(updatingPayment)} aria-pressed={payment.paid} onClick={() => onTogglePayment(plan.id, payment.installmentNumber, !payment.paid)}>
+                      <span className="payment-check"><Icon name={payment.paid ? "check" : "clock"} size={13} /></span>
+                      {isUpdating ? "กำลังบันทึก…" : payment.paid ? "ชำระแล้ว" : "ทำเครื่องหมายว่าจ่ายแล้ว"}
+                    </button>
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </article>
+  );
+}
+
+function InstallmentFormModal({ saving, onClose, onSave }) {
+  const [form, setForm] = useState(() => ({
+    id: "",
+    name: "",
+    price: "",
+    interestRate: "0",
+    months: "10",
+    bank: "กสิกรไทย",
+    startMonth: currentInstallmentMonth(),
+  }));
+  const price = Number(form.price);
+  const rate = Number(form.interestRate);
+  const months = Number(form.months);
+  const total = price > 0 && rate >= 0 ? Math.round(price * (1 + rate / 100) * 100) / 100 : 0;
+  const regularPayment = months > 0 ? Math.floor((total / months) * 100) / 100 : 0;
+
+  function change(field, value) {
+    setForm((current) => ({ ...current, [field]: value }));
+  }
+
+  async function submit(event) {
+    event.preventDefault();
+    const id = form.id || globalThis.crypto?.randomUUID?.() || `INS-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    setForm((current) => ({ ...current, id }));
+    await onSave({ ...form, id, price, interestRate: rate, months });
+  }
+
+  return (
+    <div className="modal-backdrop installment-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !saving && onClose()}>
+      <section className="installment-form-modal" role="dialog" aria-modal="true" aria-labelledby="installment-form-title">
+        <header className="modal-header">
+          <div><span className="modal-kicker">แผนผ่อนสินค้า</span><h2 id="installment-form-title">เพิ่มรายการผ่อน</h2></div>
+          <button className="icon-button" type="button" aria-label="ปิด" onClick={onClose} disabled={saving}><Icon name="close" size={19} /></button>
+        </header>
+        <form onSubmit={submit}>
+          <div className="installment-form-body">
+            <div className="review-form installment-fields">
+              <label>ชื่อรายการสินค้า<input autoFocus maxLength={120} required placeholder="เช่น iPad Air, โทรศัพท์" value={form.name} onChange={(event) => change("name", event.target.value)} /></label>
+              <div className="form-two-col">
+                <label>ราคาสินค้า (บาท)<input type="number" min="0.01" max="100000000" step="0.01" required placeholder="เช่น 25000" value={form.price} onChange={(event) => change("price", event.target.value)} /></label>
+                <label>ดอกเบี้ยรวมตลอดแผน (%)<input type="number" min="0" max="100" step="0.01" required value={form.interestRate} onChange={(event) => change("interestRate", event.target.value)} /><small className="installment-field-hint">เริ่มต้น 0% · ถ้าไม่มีดอกเบี้ยให้คงค่าเดิม</small></label>
+              </div>
+              <div className="form-two-col">
+                <label>จำนวนเดือน<input type="number" min="1" max="60" step="1" required value={form.months} onChange={(event) => change("months", event.target.value)} /></label>
+                <label>เริ่มชำระเดือน<input type="month" required value={form.startMonth} onChange={(event) => change("startMonth", event.target.value)} /></label>
+              </div>
+              <fieldset className="installment-bank-picker">
+                <legend>ธนาคารเจ้าของบัตร</legend>
+                <div>{installmentBanks.map((bank) => <button key={bank.value} className={`installment-bank-choice ${form.bank === bank.value ? "selected" : ""}`} type="button" aria-pressed={form.bank === bank.value} onClick={() => change("bank", bank.value)}><span className={`installment-bank-mark bank-${bank.tone}`}>{bank.short}</span><span>{bank.label}</span><span className="bank-choice-check"><Icon name="check" size={13} /></span></button>)}</div>
+              </fieldset>
+            </div>
+            <aside className="installment-live-preview" aria-live="polite">
+              <span className="installment-preview-icon"><Icon name="chart" size={19} /></span>
+              <small>ประมาณการยอดผ่อน</small>
+              <strong>฿ {formatNumber(regularPayment)}<em> / เดือน</em></strong>
+              <div><span>เงินต้น</span><b>฿ {formatNumber(price || 0)}</b></div>
+              <div><span>ดอกเบี้ยรวม</span><b>฿ {formatNumber(total - (price || 0))}</b></div>
+              <div className="preview-total"><span>ยอดชำระรวม</span><b>฿ {formatNumber(total)}</b></div>
+              <p>หารยอดรวมเป็นงวดเท่า ๆ กัน โดยปรับเศษสตางค์ในงวดสุดท้าย</p>
+            </aside>
+          </div>
+          <footer className="modal-footer">
+            <button className="secondary-button" type="button" onClick={onClose} disabled={saving}>ยกเลิก</button>
+            <button className="primary-button" type="submit" disabled={saving || !form.name.trim() || !(price > 0) || !(months > 0)}><Icon name={saving ? "clock" : "check"} size={16} />{saving ? "กำลังบันทึก…" : "บันทึกแผนผ่อน"}</button>
+          </footer>
+        </form>
+      </section>
     </div>
   );
 }

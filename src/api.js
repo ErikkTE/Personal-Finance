@@ -121,3 +121,27 @@ export async function restoreHiddenTransactions(budgetMonth) {
   }
   return result;
 }
+
+export async function listInstallments() {
+  const result = await requestJson("/api/installments");
+  if (!Array.isArray(result?.installments)) throw new Error("รูปแบบข้อมูลผ่อนชำระจาก Google Sheets ไม่ถูกต้อง");
+  return result.installments;
+}
+
+export async function saveInstallment(plan) {
+  const result = await requestJson("/api/installments", {
+    method: "POST",
+    body: JSON.stringify({ plan }),
+  });
+  if (!result?.installment) throw new Error("Google Sheets ไม่ได้ยืนยันการบันทึกแผนผ่อน");
+  return result.installment;
+}
+
+export async function setInstallmentPayment({ id, installmentNumber, paid }) {
+  const result = await requestJson("/api/installments", {
+    method: "PATCH",
+    body: JSON.stringify({ id, installmentNumber, paid }),
+  });
+  if (!result?.installment) throw new Error("Google Sheets ไม่ได้ยืนยันสถานะการชำระ");
+  return result.installment;
+}
