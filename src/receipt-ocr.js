@@ -3,8 +3,10 @@ const THAI_DIGITS = "๐๑๒๓๔๕๖๗๘๙";
 const NUMBER_TOKEN = String.raw`(?:\d{1,3}(?:[ ,]\d{3})+|\d+)(?:\.\d{1,2})?`;
 const CURRENCY_PATTERN = new RegExp(String.raw`(?:฿|THB)\s*(${NUMBER_TOKEN})|(${NUMBER_TOKEN})\s*(?:บาท|THB|฿)`, "gi");
 const NUMBER_PATTERN = new RegExp(String.raw`(?<![\d/])${NUMBER_TOKEN}(?!\d)`, "g");
-const AMOUNT_LABEL_PATTERN = /ยอดชำระสุทธิ|ยอดเงินสุทธิ|ยอดสุทธิ|จำนวนเงิน|ยอดชำระ|ยอดรับชำระ|ยอดโอน|ยอดเงิน|รวมทั้งสิ้น|ยอดรวม|รวมเงิน|grand\s*total|net\s*amount|total\s*due|transfer\s*amount|\bamount\b|\btotal\b|\bpaid\b/i;
+const NET_AMOUNT_LABEL_PATTERN = /ยอดชำระสุทธิ|ยอดเงินสุทธิ|ยอดสุทธิ|ยอดชำระ|ยอดรับชำระ|ยอดที่ชำระ|ยอดที่จ่าย|ยอดจ่ายจริง|จำนวนเงินที่ชำระ|จำนวนเงินที่จ่าย|จำนวนเงินสุทธิ|จำนวนที่ชำระ|grand\s*total|net\s*amount|total\s*due|paid\s*amount|amount\s*paid/i;
+const AMOUNT_LABEL_PATTERN = /ยอดชำระสุทธิ|ยอดเงินสุทธิ|ยอดสุทธิ|จำนวนเงิน|ยอดชำระ|ยอดรับชำระ|ยอดโอน|ยอดเงิน|รวมทั้งสิ้น|ยอดรวม|รวมเงิน|จำนวน(?=\s*[:：])|grand\s*total|net\s*amount|total\s*due|transfer\s*amount|\bamount\b|\btotal\b|\bpaid\b/i;
 const FEE_PATTERN = /ค่าธรรมเนียม|ค่าบริการ|commission|\bfee\b|\bvat\b|\btax\b/i;
+const NON_PAYABLE_AMOUNT_PATTERN = /ค่าสินค้า(?:\s*\/\s*บริการ)?|ราคาสินค้า|ราคาเต็ม|ยอดก่อน(?:หัก)?ส่วนลด|ส่วนลด|discount|coupon|cashback|ยอดประหยัด|สิทธิไทยช่วยไทย/i;
 const NON_AMOUNT_CONTEXT_PATTERN = /วันที่|เวลา|เลขที่รายการ|เลขที่อ้างอิง|reference|transaction\s*(?:id|no|number)|บัญชี|account|พร้อมเพย์|qr\s*code/i;
 const ENGLISH_MONTH_PATTERN = "jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?";
 
@@ -24,10 +26,14 @@ function parseAmount(lines) {
     const line = lines[index];
     const previousLine = lines[index - 1] || "";
     const nextLine = lines[index + 1] || "";
-    if (FEE_PATTERN.test(line) || FEE_PATTERN.test(previousLine)) continue;
+    if (
+      FEE_PATTERN.test(line) || FEE_PATTERN.test(previousLine)
+      || NON_PAYABLE_AMOUNT_PATTERN.test(line) || NON_PAYABLE_AMOUNT_PATTERN.test(previousLine)
+    ) continue;
 
     const hasExplicitLabel = AMOUNT_LABEL_PATTERN.test(line);
     const hasPreviousLabel = AMOUNT_LABEL_PATTERN.test(previousLine);
+    const hasNetAmountLabel = NET_AMOUNT_LABEL_PATTERN.test(line) || NET_AMOUNT_LABEL_PATTERN.test(previousLine);
     const hasCurrency = /฿|\bTHB\b|บาท/i.test(line) || /^\s*(?:บาท|THB|฿)\s*$/i.test(nextLine);
     const hasNonAmountContext = NON_AMOUNT_CONTEXT_PATTERN.test(line);
     if (hasNonAmountContext && !hasCurrency && !hasExplicitLabel) continue;
@@ -40,7 +46,8 @@ function parseAmount(lines) {
       const decimal = /\.\d{1,2}$/.test(rawValue);
       let score = 0;
       if (currencyEvidence || hasCurrency) score += 100;
-      if (hasExplicitLabel) score += 90;
+      if (hasNetAmountLabel) score += 180;
+      else if (hasExplicitLabel) score += 90;
       else if (hasPreviousLabel) score += 65;
       if (grouped) score += 30;
       if (decimal) score += 30;
@@ -64,7 +71,7 @@ function parseAmount(lines) {
   }
 
   candidates.sort((left, right) => right.score - left.score || right.amount - left.amount);
-  return candidates[0]?.amount ?? null;
+  return candidates[0] ?? null;
 }
 
 function validIsoDate(year, month, day) {
@@ -123,18 +130,51 @@ function cleanName(value) {
 }
 
 function parseMerchant(lines) {
-  const merchantLabel = /^(?:ชื่อร้าน|ร้านค้า|merchant|paid\s+to|transfer\s+to|ชื่อบัญชีผู้รับ|ชื่อผู้รับเงิน|ชื่อผู้รับ|ผู้รับเงิน|ผู้รับ|ชำระให้|โอนให้)\s*[:：-]?\s*(.+)$/i;
-  const standaloneMerchantLabel = /^(?:ชื่อร้าน|ร้านค้า|merchant|paid\s+to|transfer\s+to|ชื่อบัญชีผู้รับ|ชื่อผู้รับเงิน|ชื่อผู้รับ|ผู้รับเงิน|ผู้รับ|ชำระให้|โอนให้)\s*[:：-]?$/i;
+  const merchantLabel = /^(?:ชื่อร้าน|ร้านค้า|merchant|paid\s+to|transfer\s+to|ชื่อบัญชีผู้รับ|ชื่อผู้รับเงิน|ชื่อผู้รับ|ผู้รับเงิน|ผู้รับ|ไปยัง|to|ชำระให้|โอนให้)\s*[:：-]?\s*(.+)$/i;
+  const standaloneMerchantLabel = /^(?:ชื่อร้าน|ร้านค้า|merchant|paid\s+to|transfer\s+to|ชื่อบัญชีผู้รับ|ชื่อผู้รับเงิน|ชื่อผู้รับ|ผู้รับเงิน|ผู้รับ|ไปยัง|to|ชำระให้|โอนให้)\s*[:：-]?$/i;
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
     const match = line.match(merchantLabel);
     if (match?.[1]) return cleanName(match[1]);
-    if (standaloneMerchantLabel.test(line) && lines[index + 1]) return cleanName(lines[index + 1]);
+    if (standaloneMerchantLabel.test(line)) {
+      const labeledPayee = lines.slice(index + 1).find(isMerchantCandidate_);
+      if (labeledPayee) return cleanName(labeledPayee);
+    }
   }
 
-  const skipLine = /(?:ใบเสร็จ|ใบกำกับภาษี|tax\s*invoice|receipt|สลิป|payment\s*(?:slip|successful)|transaction|reference|สำเร็จ|เลขที่|วันที่|เวลา|สาขา|โทรศัพท์|โทร\.|ที่อยู่|จำนวนเงิน|ยอด|รวมเงิน|บาท|\b(?:make|scb|kbank|k\s*plus|kplus|uob|bbl|ktb|ttb|tmb|cimb|gsb|baac|krungthai|krungsri|bangkok\s*bank|bualuang|ayudhya|kma|mymo|truemoney|promptpay|a[\s-]?mobile)\b|ธนาคารไทยพาณิชย์|ธนาคารกสิกรไทย|ธนาคารกรุงไทย|ธนาคารกรุงเทพ|ธนาคารกรุงศรี|ธนาคารออมสิน|ธนาคารเพื่อการเกษตร|พร้อมเพย์)/i;
-  const candidate = lines.find((line) => /[A-Za-z\u0E00-\u0E7F]/.test(line) && !skipLine.test(line) && line.length <= 80);
+  const arrowIndex = lines.findIndex((line) => /^(?:↓|↘|⟱|⬇|⇩|▼|→)$/u.test(line));
+  if (arrowIndex >= 0) {
+    const payeeAfterArrow = lines.slice(arrowIndex + 1).find(isMerchantCandidate_);
+    if (payeeAfterArrow) return cleanName(payeeAfterArrow);
+  }
+
+  const walletIdIndex = lines.findIndex((line) => /\bG\s*-?\s*Wallet\s*ID\b/i.test(line));
+  if (walletIdIndex >= 0) {
+    const walletPayee = lines.slice(walletIdIndex + 1).find(isMerchantCandidate_);
+    if (walletPayee) return cleanName(walletPayee);
+  }
+
+  // KBank's transfer slips place the sender's bank and account before an arrow,
+  // but OCR can miss the arrow. The first recipient-like line after that bank
+  // block is a safer fallback than the payer's name at the top of the slip.
+  const senderBankIndex = lines.findIndex((line) => /^ธ\.?\s*(?:กสิกรไทย|ไทยพาณิชย์|กรุงไทย|กรุงเทพ|กรุงศรี|ออมสิน|ก\.ส\.|กส\.ส\.|ธกส)/i.test(line));
+  if (senderBankIndex >= 0) {
+    const payeeAfterSenderBank = lines.slice(senderBankIndex + 1).find(isMerchantCandidate_);
+    if (payeeAfterSenderBank) return cleanName(payeeAfterSenderBank);
+  }
+
+  const candidate = lines.find(isMerchantCandidate_);
   return candidate ? cleanName(candidate) : null;
+}
+
+function isMerchantCandidate_(line) {
+  const value = cleanName(line);
+  if (!value || value.length > 100 || !/[A-Za-z\u0E00-\u0E7F]/.test(value)) return false;
+  if (/^(?:จาก|ไปยัง|from|to|↓|↘|⟱|⬇|⇩|▼|→)$/iu.test(value)) return false;
+  if (/\d{4,}/.test(value)) return false;
+  if (/(?:ใบเสร็จ|ใบกำกับภาษี|tax\s*invoice|receipt|สลิป|payment\s*(?:slip|successful)|transaction|reference|สำเร็จ|เลขที่รายการ|วันที่|เวลา|สาขา|โทรศัพท์|โทร\.|ที่อยู่|จำนวนเงิน|ยอดชำระ|ยอดเงิน|รวมเงิน|ค่าธรรมเนียม|ค่าบริการ|บัญชีต้นทาง|เลขที่บัญชี|account\s*(?:number|no\.?|id)|พร้อมเพย์)/i.test(value)) return false;
+  if (/^(?:(?:ธ\.?|ธนาคาร)\s*)?(?:make(?:\s*by\s*kbank)?|scb(?:\s*easy)?|kbank|k\s*\+|k\s*plus|kplus|uob|bbl|ktb|ttb|tmb|cimb(?:\s*thai)?|gsb|baac|krungthai|krungsri|bangkok\s*bank|bualuang|ayudhya|kma|mymo|truemoney|g\s*-?\s*wallet(?:\s*id)?|promptpay|a[\s-]?mobile|ไทยพาณิชย์|กสิกรไทย|กรุงไทย|กรุงเทพ|บัวหลวง|กรุงศรี|ออมสิน|ธกส|พร้อมเพย์)$/i.test(value)) return false;
+  return true;
 }
 
 function parseMemo(lines) {
@@ -153,16 +193,7 @@ function parseMemo(lines) {
       .replace(/^ค[่]?าเทอม/i, "ค่าเทอม");
   }
 
-  const referenceIndex = lines.findIndex((line) => /เลขที่รายการ|เลขที่อ้างอิง|reference\s*(?:no|number)?|transaction\s*(?:id|no|number)/i.test(line));
-  if (referenceIndex < 0) return null;
-
-  const trailingMemo = lines.slice(referenceIndex + 1).filter((line) =>
-    /[\u0E00-\u0E7F]/.test(line)
-    && line.length <= 80
-    && !/สแกน|ตรวจสอบ|qr\s*code|ค่าธรรมเนียม|บาท|ธนาคาร|make\s*by|kbank|สำเร็จ/i.test(line)
-    && !/\d{4,}/.test(line)
-  );
-  return trailingMemo.length ? cleanName(trailingMemo[trailingMemo.length - 1]) : null;
+  return null;
 }
 
 function parseCategory(text) {
@@ -172,9 +203,9 @@ function parseCategory(text) {
     ["บัตรเครดิต", /ชำระบัตรเครดิต|credit\s*card\s*payment/i],
     ["ค่าโทรศัพท์/อินเทอร์เน็ต", /\bais\b|\bdtac\b|\btrue(?:\s*(?:move|online))?\b|ค่าโทรศัพท์|ค่าอินเทอร์เน็ต|internet\s*bill/i],
     ["ค่าสาธารณูปโภค", /การไฟฟ้า|ค่าไฟ|การประปา|ค่าน้ำประปา|electricity\s*bill|water\s*bill/i],
-    ["ค่าเดินทาง", /bts|mrt|grab(?:taxi)?|bolt|taxi|ทางด่วน|น้ำมันเชื้อเพลิง|ค่าทางด่วน/i],
+    ["ค่าเดินทาง", /bts|mrt|grab(?:taxi)?|bolt|taxi|ทางด่วน|น้ำมันเชื้อเพลิง|ค่าทางด่วน|รถเมล์|รถโดยสาร|รถประจำทาง|รถทัวร์|รถไฟฟ้า|ไทย\s*สมายล์\s*บัส|สมายล์\s*บัส|\bsmile\s*bus\b|\bbus\b|\btransit\b/i],
     ["สุขภาพ", /โรงพยาบาล|คลินิก|ร้านขายยา|pharmacy|hospital|clinic/i],
-    ["อาหาร", /ร้านอาหาร|อาหาร|กาแฟ|coffee|restaurant|foodpanda|grabfood|lineman/i],
+    ["อาหาร", /ร้านอาหาร|อาหาร|ข้าวมันไก่|ข้าวขาหมู|ข้าวแกง|ก๋วยเตี๋ยว|ก๋วยจั๊บ|ผัดไทย|กาแฟ|coffee|restaurant|foodpanda|grabfood|lineman/i],
     ["บ้านและที่พัก", /ค่าเช่าบ้าน|ค่าเช่าห้อง|ค่าเช่าคอนโด|ที่พัก|rent\s*payment/i],
     ["ช้อปปิ้ง", /shopee|lazada|central|big\s*c|lotus|shopping/i],
   ];
@@ -182,13 +213,14 @@ function parseCategory(text) {
 }
 
 function parseChannel(lines) {
+  if (lines.some((line) => /\bG\s*-?\s*Wallet(?:\s*ID)?\b|G\s*Wallet\s*ID/i.test(line))) return "G-Wallet";
   const makeLogoIndex = lines.findIndex((line) => /make/i.test(line));
   if (makeLogoIndex >= 0 && lines.slice(makeLogoIndex, makeLogoIndex + 3).some((line) => /k\s*bank/i.test(line))) return "KBank";
   if (lines.some((line) => /make\s*(?:by\s*)?kbank|k\s*bank\s*make/i.test(line))) return "KBank";
 
   const channelOptions = [
     ["SCB", /\bSCB\b|ไทยพาณิชย์|SCB\s*Easy/i],
-    ["KBank", /\bk\s*bank\b|\bkbank\b|กสิกรไทย|กสิกร|\bk\s*plus\b|\bkplus\b/i],
+    ["KBank", /\bk\s*bank\b|\bkbank\b|กสิกรไทย|กสิกร|\bk\s*plus\b|\bkplus\b|\bk\s*\+/i],
     ["Krungthai", /\bKTB\b|Krungthai|กรุงไทย|เป๋าตัง|NEXT/i],
     ["Bangkok Bank", /\bBBL\b|Bangkok\s*Bank|ธนาคารกรุงเทพ|บัวหลวง|Bualuang/i],
     ["Krungsri", /Krungsri|Ayudhya|กรุงศรี|KMA/i],
@@ -197,6 +229,7 @@ function parseChannel(lines) {
     ["CIMB Thai", /\bCIMB(?:\s*Thai)?\b|ซีไอเอ็มบี/i],
     ["GSB", /\bGSB\b|ออมสิน|My\s*Mo/i],
     ["BAAC", /\bBAAC\b|ธ\s*\.?\s*ก\s*\.?\s*ส|เพื่อการเกษตร|A[\s-]?Mobile/i],
+    ["G-Wallet", /\bG\s*-?\s*Wallet(?:\s*ID)?\b|G\s*Wallet\s*ID/i],
     ["TrueMoney", /True\s*Money|TrueMoney|ทรูมันนี่/i],
     ["Shopee", /Shopee|SPayLater/i],
     ["พร้อมเพย์", /PromptPay|พร้อมเพย์/i],
@@ -266,12 +299,31 @@ function mergeOcrResults(results, qrInfo = { detected: false, amount: null }) {
     return values[0] ?? null;
   };
   const date = pickField("date", "วันที่");
-  let amount = pickField("amount", "ยอดเงิน");
+  const amountByValue = new Map();
+  results.forEach((result) => {
+    if (result.amount == null || result.amount === "") return;
+    const previous = amountByValue.get(result.amount);
+    const candidate = {
+      amount: result.amount,
+      score: Number(result.amountScore) || 0,
+      confidence: Number(result.confidence) || 0,
+    };
+    if (!previous || candidate.score > previous.score || (candidate.score === previous.score && candidate.confidence > previous.confidence)) {
+      amountByValue.set(result.amount, candidate);
+    }
+  });
+  const amountChoices = [...amountByValue.values()].sort((left, right) => right.score - left.score || right.confidence - left.confidence);
+  let amount = amountChoices[0]?.amount ?? null;
+  let amountScore = amountChoices[0]?.score ?? 0;
+  if (amountChoices.length > 1 && amountChoices[0].score - amountChoices[1].score < 50) {
+    amount = null;
+    amountScore = 0;
+    conflicts.add("ยอดเงิน");
+  }
   const name = pickField("name", "ชื่อรายการ");
   const category = pickField("category", "หมวดหมู่");
   const channel = pickField("channel", "ช่องทาง");
-  const qrAmountMismatch = qrInfo.amount != null
-    && results.some((result) => result.amount != null && result.amount !== qrInfo.amount);
+  const qrAmountMismatch = qrInfo.amount != null && amount != null && amount !== qrInfo.amount;
   if (qrAmountMismatch) {
     amount = null;
     conflicts.add("ยอดเงิน");
@@ -285,6 +337,7 @@ function mergeOcrResults(results, qrInfo = { detected: false, amount: null }) {
     text: [...new Set(results.map((result) => result.text).filter(Boolean))].join("\n\n"),
     date,
     amount,
+    amountScore,
     name,
     category,
     channel,
@@ -292,7 +345,7 @@ function mergeOcrResults(results, qrInfo = { detected: false, amount: null }) {
     qrDetected: Boolean(qrInfo.detected),
     qrAmount: qrInfo.amount,
     qrAmountMismatch,
-    ocrAmountCandidates: [...new Set(results.map((result) => result.amount).filter((value) => value != null))],
+    ocrAmountCandidates: amountChoices.map((candidate) => candidate.amount),
     fieldsMissing,
     fieldsRead: [date, amount, name, category, channel].filter(Boolean).length,
   };
@@ -394,6 +447,7 @@ function parseFocusedResult(ocrData, focus) {
   for (const field of ["date", "amount", "name", "category", "channel"]) {
     if (!focus.includes(field)) parsed[field] = null;
   }
+  if (!focus.includes("amount")) parsed.amountScore = 0;
   parsed.fieldsRead = focus.filter((field) => parsed[field] != null).length;
   return parsed;
 }
@@ -402,7 +456,8 @@ export function extractReceiptFields(rawText) {
   const normalizedText = normalizeDigits(rawText).replace(/\r/g, "").normalize("NFC");
   const lines = normalizedText.split("\n").map((line) => line.trim()).filter(Boolean);
   const date = parseDate(lines);
-  const amount = parseAmount(lines);
+  const amountCandidate = parseAmount(lines);
+  const amount = amountCandidate?.amount ?? null;
   const memo = parseMemo(lines);
   const name = memo || parseMerchant(lines);
   const category = parseCategory(`${normalizedText}\n${memo || ""}`);
@@ -419,6 +474,7 @@ export function extractReceiptFields(rawText) {
     text: normalizedText.trim(),
     date,
     amount,
+    amountScore: amountCandidate?.score ?? 0,
     name,
     category,
     channel,

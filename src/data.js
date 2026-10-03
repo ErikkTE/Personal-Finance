@@ -64,6 +64,7 @@ export const channelOptions = [
   "CIMB Thai",
   "GSB",
   "BAAC",
+  "G-Wallet",
   "TrueMoney",
   "Shopee",
   "เงินสด",
