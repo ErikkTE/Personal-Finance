@@ -1,4 +1,4 @@
-import { getIntegrationState } from "../../lib/server/config.js";
+import { APP_PASSWORD_MIN_LENGTH, getIntegrationState } from "../../lib/server/config.js";
 import { checkAppPassword, createSessionCookie, isSameOriginRequest, setNoStore } from "../../lib/server/session.js";
 
 export default function handler(req, res) {
@@ -9,7 +9,7 @@ export default function handler(req, res) {
   const state = getIntegrationState();
   const password = process.env.APP_PASSWORD || "";
   const secret = process.env.SESSION_SECRET || "";
-  if (!state.configured || password.length < 12 || secret.length < 32) {
+  if (!state.configured || password.length < APP_PASSWORD_MIN_LENGTH || secret.length < 32) {
     return res.status(503).json({ error: "การเชื่อมต่อยังตั้งค่าไม่ครบ" });
   }
 

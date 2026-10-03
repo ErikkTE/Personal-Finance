@@ -18,10 +18,12 @@ import {
   getGoogleStatus,
   listTransactions,
   removeTransaction as removeGoogleTransaction,
+  restoreHiddenTransactions as restoreGoogleHiddenTransactions,
   saveTransaction as saveGoogleTransaction,
   signIn,
   signOut,
 } from "./api";
+import { readReceipt } from "./receipt-ocr";
 
 const navItems = [
   { key: "overview", label: "ภาพรวม", icon: "grid" },
@@ -39,10 +41,23 @@ function loadSavedTransactions() {
   }
 }
 
+function ocrProgressLabel(status) {
+  if (status === "loading tesseract core") return "กำลังเตรียมระบบอ่านข้อความ";
+  if (status === "loading language traineddata") return "กำลังโหลดชุดภาษาไทยและอังกฤษ";
+  if (status === "initializing api") return "กำลังเริ่มระบบ OCR";
+  if (status === "preparing receipt image") return "กำลังปรับภาพในอุปกรณ์";
+  if (status === "reading receipt QR") return "กำลังอ่าน QR ในอุปกรณ์";
+  if (status === "recognizing date region") return "กำลังอ่านบริเวณวันที่";
+  if (status === "recognizing amount region") return "กำลังอ่านบริเวณจำนวนเงิน";
+  if (status === "recognizing text") return "กำลังอ่านข้อความจากรูป";
+  return "กำลังเตรียมอ่านสลิป";
+}
+
 function App() {
   const [activeView, setActiveView] = useState("overview");
   const [selectedMonth, setSelectedMonth] = useState(getCurrentMonthValue);
   const [transactions, setTransactions] = useState([]);
+  const [hiddenTransactions, setHiddenTransactions] = useState([]);
   const [draft, setDraft] = useState(null);
   const [toast, setToast] = useState("");
   const [saving, setSaving] = useState(false);
@@ -95,6 +110,7 @@ function App() {
 
     function enterDemoMode() {
       setTransactions(loadSavedTransactions());
+      setHiddenTransactions([]);
       setConnection({ mode: "local", state: "demo" });
       setRuntime({ status: "ready", mode: "local" });
     }
@@ -129,6 +145,7 @@ function App() {
     setRuntime({ status: "syncing", mode: "google" });
     const [health, remoteTransactions] = await Promise.all([getGoogleStatus(), listTransactions()]);
     setTransactions(remoteTransactions.filter((item) => item.status !== "ลบแล้ว"));
+    setHiddenTransactions(remoteTransactions.filter((item) => item.status === "ลบแล้ว"));
     setConnection({ mode: "google", state: "connected", ...health });
     setRuntime({ status: "ready", mode: "google" });
   }
@@ -153,6 +170,7 @@ function App() {
   async function handleLogout() {
     try { await signOut(); } catch { /* The local session still returns to the sign-in screen. */ }
     setTransactions([]);
+    setHiddenTransactions([]);
     setShowSettings(false);
     setConnection({ mode: "google", state: "locked" });
     setRuntime({ status: "login", mode: "google" });
@@ -189,7 +207,58 @@ function App() {
       return;
     }
     const file = selectedFile.type === mimeType ? selectedFile : new File([selectedFile], selectedFile.name, { type: mimeType, lastModified: selectedFile.lastModified });
-    setDraft({ ...createDraftFromFile(file), sourceFile: file });
+    const nextDraft = {
+      ...createDraftFromFile(file),
+      sourceFile: file,
+      ocrStatus: file.type.startsWith("image/") ? "reading" : "unsupported",
+      ocrProgress: 0,
+      ocrPhase: "",
+      ocrText: "",
+      ocrFieldsRead: 0,
+      ocrMissingFields: [],
+      ocrAmountCandidates: [],
+      qrDetected: false,
+      qrAmount: null,
+      ocrQrAmountMismatch: false,
+    };
+    setDraft(nextDraft);
+    if (!file.type.startsWith("image/")) return;
+
+    readReceipt(file, ({ status, progress }) => {
+      setDraft((current) => current?.sourceFile === file
+        ? { ...current, ocrProgress: progress, ocrPhase: status }
+        : current);
+    }).then((result) => {
+      setDraft((current) => {
+        if (current?.sourceFile !== file) return current;
+        const date = result.date || current.date;
+        const category = result.category || current.category;
+        const fieldsRead = result.fieldsRead || 0;
+        return {
+          ...current,
+          date,
+          budgetMonth: deriveBudgetMonth(date, category),
+          name: result.name || current.name,
+          amount: result.amount ? String(result.amount) : current.amount,
+          category,
+          channel: result.channel || current.channel,
+          ocrStatus: result.text ? (fieldsRead ? "done" : "unrecognized") : "empty",
+          ocrProgress: 100,
+          ocrPhase: "recognizing text",
+          ocrText: result.text,
+          ocrFieldsRead: fieldsRead,
+          ocrMissingFields: result.fieldsMissing || [],
+          ocrAmountCandidates: result.ocrAmountCandidates || [],
+          qrDetected: Boolean(result.qrDetected),
+          qrAmount: result.qrAmount ?? null,
+          ocrQrAmountMismatch: Boolean(result.qrAmountMismatch),
+        };
+      });
+    }).catch(() => {
+      setDraft((current) => current?.sourceFile === file
+        ? { ...current, ocrStatus: "failed", ocrPhase: "", ocrProgress: 0 }
+        : current);
+    });
   }
 
   function updateDraft(field, value) {
@@ -208,9 +277,17 @@ function App() {
   }
 
   async function confirmDraft() {
+    if (draft?.ocrStatus === "reading") {
+      setToast("รอให้ระบบอ่านข้อความจากสลิปก่อน แล้วตรวจข้อมูลอีกครั้งครับ");
+      return;
+    }
     const amount = Number(String(draft?.amount ?? "").replaceAll(",", ""));
-    if (!draft || !Number.isFinite(amount) || amount <= 0 || !String(draft.name || "").trim()) {
-      setToast("กรุณาตรวจสอบจำนวนเงินก่อนยืนยันรายการ");
+    if (!draft?.date) {
+      setToast("กรุณาระบุวันที่จากสลิปก่อนยืนยันรายการ");
+      return;
+    }
+    if (!Number.isFinite(amount) || amount <= 0 || !String(draft.name || "").trim()) {
+      setToast("กรุณาตรวจสอบจำนวนเงินและชื่อรายการก่อนยืนยัน");
       return;
     }
 
@@ -250,10 +327,36 @@ function App() {
   async function removeTransaction(id) {
     try {
       if (runtime.mode === "google") await removeGoogleTransaction(id);
+      const hiddenItem = transactions.find((item) => item.id === id);
       setTransactions((current) => current.filter((item) => item.id !== id));
+      if (runtime.mode === "google" && hiddenItem) {
+        setHiddenTransactions((current) => [
+          { ...hiddenItem, status: "ลบแล้ว" },
+          ...current.filter((item) => item.id !== id),
+        ]);
+      }
       setToast(runtime.mode === "google" ? "ซ่อนรายการจากแอปแล้ว โดยเก็บแถวไว้ในชีต" : "ลบรายการทดลองออกจากเครื่องแล้ว");
     } catch (error) {
       setToast(error.message || "ลบรายการไม่สำเร็จ");
+    }
+  }
+
+  async function restoreHiddenForMonth(budgetMonth) {
+    if (runtime.mode !== "google") {
+      setToast("การคืนรายการที่ซ่อนใช้ได้เมื่อเชื่อมต่อ Google Sheets");
+      return;
+    }
+
+    try {
+      const result = await restoreGoogleHiddenTransactions(budgetMonth);
+      const refreshedTransactions = result.transactions || [];
+      setTransactions(refreshedTransactions.filter((item) => item.status !== "ลบแล้ว"));
+      setHiddenTransactions(refreshedTransactions.filter((item) => item.status === "ลบแล้ว"));
+      setToast(result.restoredCount
+        ? `คืนรายการที่ซ่อน ${result.restoredCount} รายการแล้ว`
+        : "เดือนนี้ไม่มีรายการที่ซ่อนอยู่");
+    } catch (error) {
+      setToast(error.message || "คืนรายการที่ซ่อนไม่สำเร็จ");
     }
   }
 
@@ -306,6 +409,8 @@ function App() {
               }}
               connection={connection}
               onRemove={removeTransaction}
+              hiddenTransactions={hiddenTransactions.filter((item) => item.budgetMonth === selectedMonth)}
+              onRestoreMonth={restoreHiddenForMonth}
             />
           )}
           {activeView === "coach" && <CoachView summary={summary} selectedMonth={selectedMonth} />}
@@ -323,7 +428,7 @@ function App() {
         }}
       />
       {draft && (
-        <ReviewModal draft={draft} monthChoices={monthChoices} saving={saving} onChange={updateDraft} onClose={closeDraft} onConfirm={confirmDraft} />
+        <ReviewModal draft={draft} monthChoices={monthChoices} saving={saving} storageMode={runtime.mode} onChange={updateDraft} onClose={closeDraft} onConfirm={confirmDraft} />
       )}
       {showSettings && <ConnectionDialog connection={connection} onClose={() => setShowSettings(false)} onLogout={handleLogout} onRetry={retryGoogleConnection} />}
       {toast && <div className="toast"><Icon name="check" size={17} />{toast}</div>}
@@ -450,7 +555,7 @@ function Topbar({ activeView, selectedMonth, monthChoices, connection, onMonthCh
 }
 
 function Overview({ summary, transactions, selectedMonth, onUpload, onNavigate, onSelectTransaction }) {
-  const latest = summary.monthTransactions.slice(0, 6);
+  const monthTransactions = summary.monthTransactions;
   return (
     <div className="page-stack">
       <section className="page-intro">
@@ -476,8 +581,8 @@ function Overview({ summary, transactions, selectedMonth, onUpload, onNavigate, 
 
       <section className="dashboard-lower">
         <div className="panel transaction-panel">
-          <div className="panel-header"><div><h3>รายการล่าสุด</h3><span>{latest.length} รายการในงบเดือนนี้</span></div><button className="text-button" onClick={() => onNavigate("history")}>ดูทั้งหมด <Icon name="chevronRight" size={16} /></button></div>
-          <TransactionTable transactions={latest} onSelect={onSelectTransaction} />
+          <div className="panel-header"><div><h3>รายการทั้งหมดในเดือน {getMonthLabel(selectedMonth)}</h3><span>{monthTransactions.length} รายการ</span></div><button className="text-button" onClick={() => onNavigate("history")}>ค้นหาและกรอง <Icon name="chevronRight" size={16} /></button></div>
+          <TransactionTable transactions={monthTransactions} onSelect={onSelectTransaction} />
         </div>
         <AiSummary summary={summary} onOpen={() => onNavigate("coach")} />
       </section>
@@ -560,9 +665,10 @@ function ProcessStep({ number, title, detail, active }) {
   return <div className={`process-step ${active ? "active" : ""}`}><span className="step-number">{number}</span><span><strong>{title}</strong><small>{detail}</small></span>{active && <span className="step-current">ตอนนี้</span>}</div>;
 }
 
-function HistoryView({ transactions, selectedMonth, connection, onSelectTransaction, onRemove }) {
+function HistoryView({ transactions, selectedMonth, connection, onSelectTransaction, onRemove, hiddenTransactions, onRestoreMonth }) {
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("ทั้งหมด");
+  const [restoring, setRestoring] = useState(false);
   const categories = ["ทั้งหมด", ...categoryOptions];
   const filtered = transactions.filter((item) => {
     const matchesMonth = item.budgetMonth === selectedMonth;
@@ -570,11 +676,38 @@ function HistoryView({ transactions, selectedMonth, connection, onSelectTransact
     const haystack = `${item.name} ${item.channel} ${item.category}`.toLowerCase();
     return matchesMonth && matchesCategory && haystack.includes(query.toLowerCase());
   });
+
+  async function restoreAllHidden() {
+    if (!hiddenTransactions.length || restoring) return;
+    const shouldRestore = window.confirm(
+      `คืนรายการที่ซ่อนทั้งหมด ${hiddenTransactions.length} รายการของเดือน ${getMonthLabel(selectedMonth)} กลับมาแสดงในแอปหรือไม่? รายการเหล่านี้จะกลับไปรวมในยอดสรุปของเดือนนี้ด้วย`
+    );
+    if (!shouldRestore) return;
+
+    setRestoring(true);
+    try {
+      await onRestoreMonth(selectedMonth);
+    } finally {
+      setRestoring(false);
+    }
+  }
+
   return (
     <div className="page-stack">
       <section className="page-intro"><div><h2>ประวัติรายการ</h2><p>ตรวจสอบรายการทั้งหมดที่ถูกจัดเข้าเดือน {getMonthLabel(selectedMonth)}</p></div><button className="secondary-button"><Icon name="download" size={17} />ส่งออกภายหลัง</button></section>
       <section className="filter-bar panel"><div className="search-field"><Icon name="search" size={18} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="ค้นหารายการหรือช่องทางจ่าย" /></div><div className="select-field"><Icon name="filter" size={17} /><select value={category} onChange={(event) => setCategory(event.target.value)} aria-label="กรองตามหมวดหมู่">{categories.map((item) => <option key={item}>{item}</option>)}</select></div></section>
-      <section className="panel history-panel"><div className="panel-header"><div><h3>รายการในเดือน {getMonthLabel(selectedMonth)}</h3><span>{filtered.length} จาก {transactions.filter((item) => item.budgetMonth === selectedMonth).length} รายการ</span></div></div><TransactionTable transactions={filtered} onSelect={onSelectTransaction} /></section>
+      <section className="panel history-panel">
+        <div className="panel-header history-panel-header">
+          <div><h3>รายการในเดือน {getMonthLabel(selectedMonth)}</h3><span>{filtered.length} จาก {transactions.filter((item) => item.budgetMonth === selectedMonth).length} รายการ</span></div>
+          {connection.mode === "google" && (
+            <button className="secondary-button restore-button" type="button" disabled={!hiddenTransactions.length || restoring} onClick={restoreAllHidden}>
+              <Icon name="restore" size={16} />
+              {restoring ? "กำลังคืนรายการ…" : `คืนรายการที่ซ่อนทั้งหมด (${hiddenTransactions.length})`}
+            </button>
+          )}
+        </div>
+        <TransactionTable transactions={filtered} onSelect={onSelectTransaction} />
+      </section>
       <div className="history-footnote"><Icon name="info" size={16} /><span>{connection.mode === "google" ? "ข้อมูลนี้โหลดจาก Google Sheets รายการที่ซ่อนจากแอปยังคงอยู่ในชีต" : "ข้อมูลทดลองบันทึกไว้ในอุปกรณ์นี้เท่านั้น ยังไม่ได้ส่งไป Google Sheets/Drive"}</span>{filtered.length > 0 && <button className="danger-link" onClick={() => window.confirm(connection.mode === "google" ? "ซ่อนรายการล่าสุดจากแอปหรือไม่? แถวข้อมูลจะยังคงอยู่ใน Google Sheets" : "ลบรายการทดลองล่าสุดออกจากอุปกรณ์นี้หรือไม่?") && onRemove(filtered[0].id)}>{connection.mode === "google" ? "ซ่อนรายการล่าสุด" : "ลบรายการล่าสุด"}</button>}</div>
     </div>
   );
@@ -587,7 +720,7 @@ function CoachView({ summary, selectedMonth }) {
     <div className="page-stack">
       <section className="page-intro"><div><h2>คำแนะนำ AI</h2><p>มุมมองเชิงปฏิบัติจากรายการของเดือน {getMonthLabel(selectedMonth)}</p></div><span className="beta-label"><Icon name="sparkles" size={15} />AI Coach</span></section>
       <section className="coach-hero"><div className="coach-orb"><Icon name="sparkles" size={28} /></div><div><span className="coach-kicker">สรุปสถานะการเงิน</span><h3>{level}</h3><p>ระบบเห็นว่าภาระบัตรเครดิตและหนี้สินอยู่ที่ {ratio}% ของรายรับในเดือนนี้</p></div><div className="coach-number"><strong>{ratio}%</strong><span>ภาระต่อรายรับ</span></div></section>
-      <section className="coach-grid"><AdviceCard icon="wallet" title="รักษาเงินคงเหลือ" tone="green" text={`หลังหักภาระแล้ว คงเหลือ ฿ ${formatNumber(summary.balance)} ควรกันส่วนหนึ่งเป็นเงินสำรองก่อนเพิ่มค่าใช้จ่ายใหม่`} /><AdviceCard icon="card" title="รวมวันครบกำหนด" tone="blue" text="แนะนำให้บันทึกวันครบกำหนดของแต่ละเจ้าหนี้ เพื่อให้ระบบเตือนล่วงหน้าและเห็นยอดที่ต้องเตรียมได้แม่นขึ้น" /><AdviceCard icon="sparkles" title="สิ่งที่จะฉลาดขึ้น" tone="amber" text="เมื่อเชื่อม OCR และ AI จริง ระบบจะอ่านข้อความจากสลิป เสนอหมวดหมู่ และให้ยืนยันก่อนบันทึกอัตโนมัติ" /></section>
+      <section className="coach-grid"><AdviceCard icon="wallet" title="รักษาเงินคงเหลือ" tone="green" text={`หลังหักภาระแล้ว คงเหลือ ฿ ${formatNumber(summary.balance)} ควรกันส่วนหนึ่งเป็นเงินสำรองก่อนเพิ่มค่าใช้จ่ายใหม่`} /><AdviceCard icon="card" title="รวมวันครบกำหนด" tone="blue" text="แนะนำให้บันทึกวันครบกำหนดของแต่ละเจ้าหนี้ เพื่อให้ระบบเตือนล่วงหน้าและเห็นยอดที่ต้องเตรียมได้แม่นขึ้น" /><AdviceCard icon="sparkles" title="อ่านข้อความจากสลิป" tone="amber" text="OCR อ่านข้อความจากรูปบนอุปกรณ์และเติมข้อมูลเบื้องต้นให้ตรวจสอบก่อนบันทึก ส่วนการวิเคราะห์ด้วย AI ยังไม่ได้เชื่อมต่อ" /></section>
       <section className="panel rules-panel"><div className="panel-header"><div><h3>กติกาที่ระบบใช้ตอนนี้</h3><span>ทำให้การจัดเดือนงบประมาณสอดคล้องกับวิธีใช้เงินจริง</span></div></div><div className="rule-list"><RuleItem title="เงินเดือนปลายเดือน" detail="รายรับวันที่ 25 เป็นต้นไป สามารถจัดสรรเป็นงบเดือนถัดไป" /><RuleItem title="ชำระหนี้หลังเงินเดือน" detail="รายการบัตรเครดิตและหนี้สินวันที่ 25 เป็นต้นไป จะเสนอเดือนถัดไป" /><RuleItem title="ตรวจสอบก่อนบันทึก" detail="รูปใหม่จะอยู่สถานะรอตรวจสอบ จนกว่าจะยืนยันรายการ" /></div></section>
     </div>
   );
@@ -601,25 +734,52 @@ function RuleItem({ title, detail }) {
   return <div className="rule-item"><span className="rule-check"><Icon name="check" size={15} /></span><span><strong>{title}</strong><small>{detail}</small></span></div>;
 }
 
-function ReviewModal({ draft, monthChoices, saving, onChange, onClose, onConfirm }) {
+function ReviewModal({ draft, monthChoices, saving, storageMode, onChange, onClose, onConfirm }) {
   const isExisting = draft.isExisting;
+  const isOcrProcessing = draft.ocrStatus === "reading";
+  const fieldsDisabled = isExisting || isOcrProcessing;
+  const imageSaveMessage = storageMode === "google"
+    ? "รูปจะส่งไป Drive เมื่อกดยืนยันเท่านั้น"
+    : "โหมดทดลองจะบันทึกเฉพาะข้อมูลในอุปกรณ์และไม่ส่งภาพไป Drive";
+  const reviewMessage = draft.isDemoDetected
+    ? "ระบบจำลองตรวจพบข้อมูลจากรูปตัวอย่าง โปรดตรวจสอบความถูกต้องก่อนยืนยัน"
+    : draft.ocrStatus === "reading"
+      ? `${ocrProgressLabel(draft.ocrPhase)}${draft.ocrProgress > 0 ? ` ${draft.ocrProgress}%` : "…"} ประมวลผลบนอุปกรณ์นี้ ${imageSaveMessage}`
+      : draft.ocrStatus === "done"
+        ? `OCR อ่านข้อมูลได้ ${draft.ocrFieldsRead} ช่อง${draft.ocrMissingFields?.length ? ` · อ่านไม่ชัดหรือผลไม่ตรงกัน: ${draft.ocrMissingFields.join(", ")}` : ""} ผล OCR ยังไม่ใช่การยืนยันจากธนาคาร โปรดตรวจสอบก่อนบันทึก ${imageSaveMessage}`
+        : draft.ocrStatus === "empty" || draft.ocrStatus === "unrecognized"
+          ? "อ่านข้อความได้ไม่พอสำหรับเติมข้อมูล ช่องที่อ่านไม่ได้กรุณากรอกเอง แล้วตรวจสอบก่อนบันทึก"
+          : draft.ocrStatus === "unsupported"
+            ? "OCR รองรับเฉพาะไฟล์รูปภาพในตอนนี้ ไฟล์ PDF กรุณากรอกข้อมูลเอง"
+            : draft.ocrStatus === "failed"
+              ? "OCR อ่านรูปนี้ไม่สำเร็จ ตรวจการเชื่อมต่ออินเทอร์เน็ตแล้วกรอกข้อมูลเองได้เลย"
+            : "เลือกรูปสลิปเพื่อให้ OCR อ่านข้อมูลเบื้องต้น";
+  const qrReviewMessage = !draft.qrDetected
+    ? ""
+    : draft.ocrQrAmountMismatch
+      ? `ยอด OCR (${(draft.ocrAmountCandidates || []).map((amount) => formatNumber(amount)).join(" / ")} บาท) ไม่ตรงกับยอดใน QR (${formatNumber(draft.qrAmount)} บาท) ระบบเว้นยอดไว้ให้ตรวจสอบเอง · QR นี้ยังไม่ได้ยืนยันกับธนาคาร`
+      : draft.qrAmount != null
+        ? `อ่าน QR ในอุปกรณ์ได้ พบยอด ${formatNumber(draft.qrAmount)} บาทในข้อมูล QR · ใช้ประกอบการตรวจเท่านั้น ยังไม่ได้ยืนยันกับธนาคาร`
+        : "อ่านพบ QR ในอุปกรณ์แล้ว แต่ไม่ได้ตรวจสอบธุรกรรมกับธนาคาร";
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <section className="review-modal" role="dialog" aria-modal="true" aria-labelledby="review-title">
         <div className="modal-header"><div><span className="modal-kicker">{isExisting ? "รายละเอียดรายการ" : "ตรวจสอบข้อมูลจากสลิป"}</span><h2 id="review-title">{isExisting ? draft.name : "รายการใหม่จากหลักฐาน"}</h2></div><button className="icon-button" aria-label="ปิดหน้าต่าง" onClick={onClose}><Icon name="close" size={21} /></button></div>
         <div className="review-body">
-          <div className="receipt-preview">{draft.previewUrl ? <img src={draft.previewUrl} alt="ตัวอย่างหลักฐานที่อัปโหลด" /> : <div className="preview-empty"><Icon name="image" size={27} /><span>{draft.fileName || "ไม่มีภาพตัวอย่าง"}</span></div>}{draft.evidenceUrl && <a className="evidence-link" href={draft.evidenceUrl} target="_blank" rel="noreferrer">เปิดหลักฐานใน Google Drive</a>}<span className="preview-status"><Icon name={draft.isDemoDetected ? "check" : "info"} size={13} />{draft.isDemoDetected ? "ตรวจข้อมูลเบื้องต้นแล้ว" : "กรุณากรอกข้อมูลจากหลักฐาน"}</span></div>
+          <div className="receipt-preview">{draft.previewUrl ? <img src={draft.previewUrl} alt="ตัวอย่างหลักฐานที่อัปโหลด" /> : <div className="preview-empty"><Icon name="image" size={27} /><span>{draft.fileName || "ไม่มีภาพตัวอย่าง"}</span></div>}{draft.evidenceUrl && <a className="evidence-link" href={draft.evidenceUrl} target="_blank" rel="noreferrer">เปิดหลักฐานใน Google Drive</a>}<span className="preview-status" aria-live="polite"><Icon name={draft.ocrStatus === "done" ? "check" : "info"} size={13} />{isOcrProcessing ? `${ocrProgressLabel(draft.ocrPhase)}${draft.ocrProgress > 0 ? ` ${draft.ocrProgress}%` : "…"}` : draft.ocrStatus === "done" ? "อ่านข้อความแล้ว · กรุณาตรวจสอบ" : draft.ocrStatus === "unsupported" ? "ไฟล์นี้ยังอ่านอัตโนมัติไม่ได้" : draft.ocrStatus === "failed" || draft.ocrStatus === "empty" || draft.ocrStatus === "unrecognized" ? "กรุณาตรวจหรือกรอกข้อมูลเอง" : "รอตรวจสอบข้อมูล"}</span></div>
           <div className="review-form">
-            {!isExisting && <div className="review-note"><Icon name="info" size={16} /><span>{draft.isDemoDetected ? "ระบบจำลองตรวจพบข้อมูลจากรูปตัวอย่าง โปรดตรวจสอบความถูกต้องก่อนยืนยัน" : "ยังไม่ได้เชื่อม OCR/AI ระบบจะส่งไฟล์ไป Drive เมื่อยืนยันรายการในโหมด Google"}</span></div>}
-            <label>วันที่เกิดรายการ<input type="date" value={draft.date || ""} onChange={(event) => onChange("date", event.target.value)} disabled={isExisting} /></label>
-            <label>รายการ<input type="text" value={draft.name || ""} onChange={(event) => onChange("name", event.target.value)} disabled={isExisting} /></label>
-            <label>จำนวนเงิน (บาท)<input type="number" min="0" step="0.01" value={draft.amount ?? ""} onChange={(event) => onChange("amount", event.target.value)} disabled={isExisting} /></label>
-            <div className="form-two-col"><label>หมวดหมู่<select value={draft.category || "อื่นๆ"} onChange={(event) => onChange("category", event.target.value)} disabled={isExisting}>{categoryOptions.map((item) => <option key={item}>{item}</option>)}</select></label><label>ช่องทางจ่าย<select value={draft.channel || "อื่นๆ"} onChange={(event) => onChange("channel", event.target.value)} disabled={isExisting}>{channelOptions.map((item) => <option key={item}>{item}</option>)}</select></label></div>
-            <label>เดือนงบประมาณ<select value={draft.budgetMonth || getCurrentMonthValue()} onChange={(event) => onChange("budgetMonth", event.target.value)} disabled={isExisting}>{monthChoices.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
-            <label>หมายเหตุ<textarea rows="2" value={draft.note || ""} onChange={(event) => onChange("note", event.target.value)} disabled={isExisting} /></label>
+            {!isExisting && <div className={`review-note review-note-${draft.ocrStatus || "idle"}`} data-state={draft.ocrStatus || "idle"} role="status" aria-live="polite"><Icon name={draft.ocrStatus === "done" ? "check" : "info"} size={16} /><span>{reviewMessage}{isOcrProcessing && <span className="ocr-progress" role="progressbar" aria-label="ความคืบหน้าการอ่านข้อความ" aria-valuemin="0" aria-valuemax="100" aria-valuenow={draft.ocrProgress}><span style={{ width: `${draft.ocrProgress}%` }} /></span>}</span></div>}
+            {!isExisting && qrReviewMessage && <div className={`qr-review-note${draft.ocrQrAmountMismatch ? " qr-review-note-warning" : ""}`} role="status"><Icon name={draft.ocrQrAmountMismatch ? "info" : "check"} size={15} /><span>{qrReviewMessage}</span></div>}
+            <label>วันที่เกิดรายการ<input type="date" value={draft.date || ""} onChange={(event) => onChange("date", event.target.value)} disabled={fieldsDisabled} /></label>
+            <label>รายการ<input type="text" value={draft.name || ""} onChange={(event) => onChange("name", event.target.value)} disabled={fieldsDisabled} /></label>
+            <label>จำนวนเงิน (บาท)<input type="number" min="0" step="0.01" value={draft.amount ?? ""} onChange={(event) => onChange("amount", event.target.value)} disabled={fieldsDisabled} /></label>
+            <div className="form-two-col"><label>หมวดหมู่<select value={draft.category || "อื่นๆ"} onChange={(event) => onChange("category", event.target.value)} disabled={fieldsDisabled}>{categoryOptions.map((item) => <option key={item}>{item}</option>)}</select></label><label>ช่องทางจ่าย<select value={draft.channel || "อื่นๆ"} onChange={(event) => onChange("channel", event.target.value)} disabled={fieldsDisabled}>{channelOptions.map((item) => <option key={item}>{item}</option>)}</select></label></div>
+            <label>เดือนงบประมาณ<select value={draft.budgetMonth || getCurrentMonthValue()} onChange={(event) => onChange("budgetMonth", event.target.value)} disabled={fieldsDisabled}>{monthChoices.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
+            <label>หมายเหตุ<textarea rows="2" value={draft.note || ""} onChange={(event) => onChange("note", event.target.value)} disabled={fieldsDisabled} /></label>
+            {draft.ocrText && <details className="ocr-text-details"><summary>ดูข้อความที่ OCR อ่านได้</summary><pre>{draft.ocrText}</pre></details>}
           </div>
         </div>
-        <div className="modal-footer"><button className="secondary-button" onClick={onClose} disabled={saving}>{isExisting ? "ปิด" : "ยกเลิก"}</button>{!isExisting && <button className="primary-button" onClick={onConfirm} disabled={saving}>{saving ? "กำลังบันทึก…" : <><Icon name="check" size={17} />ยืนยันรายการ</>}</button>}</div>
+        <div className="modal-footer"><button className="secondary-button" onClick={onClose} disabled={saving}>{isExisting ? "ปิด" : "ยกเลิก"}</button>{!isExisting && <button className="primary-button" onClick={onConfirm} disabled={saving || isOcrProcessing}>{saving ? "กำลังบันทึก…" : isOcrProcessing ? "กำลังอ่านสลิป…" : <><Icon name="check" size={17} />ยืนยันรายการ</>}</button>}</div>
       </section>
     </div>
   );

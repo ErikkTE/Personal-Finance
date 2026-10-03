@@ -78,6 +78,13 @@ export default async function handler(req, res) {
       return res.status(201).json({ transaction: result.transaction });
     }
 
+    if (req.method === "PATCH") {
+      const budgetMonth = String(req.body?.budgetMonth || "").trim();
+      if (!validMonth(budgetMonth)) return res.status(400).json({ error: "เดือนงบประมาณไม่ถูกต้อง" });
+      const result = await callAppsScript({ action: "restoreMonthTransactions", budgetMonth });
+      return res.status(200).json(result);
+    }
+
     if (req.method === "DELETE") {
       const id = String(req.body?.id || "").trim();
       if (!id || id.length > 80) return res.status(400).json({ error: "ไม่พบรหัสรายการ" });
@@ -85,7 +92,7 @@ export default async function handler(req, res) {
       return res.status(200).json(result);
     }
 
-    res.setHeader("Allow", "GET, POST, DELETE");
+    res.setHeader("Allow", "GET, POST, PATCH, DELETE");
     return res.status(405).json({ error: "Method not allowed" });
   } catch (error) {
     const message = error instanceof Error ? error.message : "ไม่สามารถบันทึกรายการได้";

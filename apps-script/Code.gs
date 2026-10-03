@@ -1,4 +1,6 @@
 const TAB_TRANSACTIONS = "Transactions";
+const PREVIOUS_STATUS_HEADER = "สถานะก่อนซ่อน";
+const RESTORABLE_STATUSES = ["ยืนยันแล้ว", "รอตรวจสอบ"];
 const REQUIRED_HEADERS = [
   "Transaction ID",
   "วันที่เกิดรายการ",
@@ -30,6 +32,9 @@ function doPost(event) {
         break;
       case "listTransactions":
         data = { transactions: listTransactions_() };
+        break;
+      case "restoreMonthTransactions":
+        data = restoreMonthTransactions_(request.budgetMonth);
         break;
       case "saveTransaction":
         data = saveTransaction_(request.transaction, request.evidence);
@@ -73,7 +78,7 @@ function listTransactions_() {
   return values.map(function (row) {
     return transactionFromRow_(row, columns);
   }).filter(function (transaction) {
-    return transaction.id && transaction.status !== "ลบแล้ว";
+    return Boolean(transaction.id);
   }).reverse();
 }
 
@@ -167,15 +172,74 @@ function softDeleteTransaction_(id) {
   lock.waitLock(15000);
   try {
     const sheet = getTransactionsSheet_();
+    const previousStatusColumn = ensurePreviousStatusColumn_(sheet);
     const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getDisplayValues()[0];
     const columns = headerIndexes_(headers);
     const rowNumber = findTransactionRow_(sheet, columns["Transaction ID"], transactionId);
     if (rowNumber < 2) throw new Error("Transaction was not found");
-    sheet.getRange(rowNumber, columns["สถานะ"] + 1).setValue("ลบแล้ว");
+    const statusCell = sheet.getRange(rowNumber, columns["สถานะ"] + 1);
+    const currentStatus = String(statusCell.getValue() || "").trim();
+    if (currentStatus !== "ลบแล้ว") {
+      sheet.getRange(rowNumber, previousStatusColumn + 1).setValue(
+        RESTORABLE_STATUSES.indexOf(currentStatus) >= 0 ? currentStatus : "ยืนยันแล้ว"
+      );
+      statusCell.setValue("ลบแล้ว");
+    }
     return { ok: true, id: transactionId, status: "ลบแล้ว" };
   } finally {
     lock.releaseLock();
   }
+}
+
+function restoreMonthTransactions_(budgetMonth) {
+  const month = String(budgetMonth || "").trim();
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) throw new Error("Budget month is invalid");
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(15000);
+  try {
+    const sheet = getTransactionsSheet_();
+    const previousStatusColumn = ensurePreviousStatusColumn_(sheet);
+    const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getDisplayValues()[0];
+    const columns = headerIndexes_(headers);
+    const lastRow = sheet.getLastRow();
+    let restoredCount = 0;
+
+    if (lastRow > 1) {
+      const values = sheet.getRange(2, 1, lastRow - 1, headers.length).getValues();
+      values.forEach(function (row, index) {
+        const statusIndex = columns["สถานะ"];
+        const status = String(row[statusIndex] || "").trim();
+        const rowMonth = monthToIso_(row[columns["เดือนใช้งาน/งบประมาณ"]]);
+        if (status !== "ลบแล้ว" || rowMonth !== month) return;
+
+        const savedStatus = String(row[previousStatusColumn] || "").trim();
+        const restoredStatus = RESTORABLE_STATUSES.indexOf(savedStatus) >= 0 ? savedStatus : "ยืนยันแล้ว";
+        const rowNumber = index + 2;
+        sheet.getRange(rowNumber, statusIndex + 1).setValue(restoredStatus);
+        sheet.getRange(rowNumber, previousStatusColumn + 1).clearContent();
+        restoredCount += 1;
+      });
+    }
+
+    return {
+      budgetMonth: month,
+      restoredCount: restoredCount,
+      transactions: listTransactions_(),
+    };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function ensurePreviousStatusColumn_(sheet) {
+  const lastColumn = sheet.getLastColumn();
+  const headers = sheet.getRange(1, 1, 1, lastColumn).getDisplayValues()[0];
+  const existingIndex = headers.indexOf(PREVIOUS_STATUS_HEADER);
+  if (existingIndex >= 0) return existingIndex;
+
+  sheet.getRange(1, lastColumn + 1).setValue(PREVIOUS_STATUS_HEADER);
+  return lastColumn;
 }
 
 function saveEvidence_(evidence) {

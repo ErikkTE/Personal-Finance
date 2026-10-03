@@ -1,4 +1,4 @@
-const CACHE_NAME = "personal-finance-pwa-v3";
+const CACHE_NAME = "personal-finance-pwa-v4";
 const APP_SHELL = ["/", "/index.html", "/manifest.webmanifest", "/icon.svg"];
 
 self.addEventListener("install", (event) => {
@@ -19,6 +19,7 @@ self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
 
   const requestUrl = new URL(event.request.url);
+  if (requestUrl.origin !== self.location.origin) return;
   if (requestUrl.origin === self.location.origin && requestUrl.pathname.startsWith("/api/")) return;
   const isHtmlRequest = event.request.mode === "navigate" || requestUrl.pathname === "/" || requestUrl.pathname === "/index.html";
 

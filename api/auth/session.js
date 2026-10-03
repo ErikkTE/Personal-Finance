@@ -1,4 +1,4 @@
-import { getIntegrationState } from "../../lib/server/config.js";
+import { APP_PASSWORD_MIN_LENGTH, getIntegrationState } from "../../lib/server/config.js";
 import { hasValidSession, setNoStore } from "../../lib/server/session.js";
 
 export default function handler(req, res) {
@@ -7,7 +7,7 @@ export default function handler(req, res) {
 
   const state = getIntegrationState();
   const secret = process.env.SESSION_SECRET || "";
-  const passwordReady = (process.env.APP_PASSWORD || "").length >= 12;
+  const passwordReady = (process.env.APP_PASSWORD || "").length >= APP_PASSWORD_MIN_LENGTH;
   const secretReady = secret.length >= 32;
   const configured = state.configured && passwordReady && secretReady;
 

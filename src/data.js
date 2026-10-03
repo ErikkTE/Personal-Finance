@@ -47,6 +47,7 @@ export const categoryOptions = [
   "อาหาร",
   "ช้อปปิ้ง",
   "สุขภาพ",
+  "การศึกษา",
   "ประกัน",
   "บ้านและที่พัก",
   "อื่นๆ",
@@ -55,7 +56,15 @@ export const categoryOptions = [
 export const channelOptions = [
   "SCB",
   "KBank",
+  "Krungthai",
+  "Bangkok Bank",
+  "Krungsri",
+  "ttb",
   "UOB",
+  "CIMB Thai",
+  "GSB",
+  "BAAC",
+  "TrueMoney",
   "Shopee",
   "เงินสด",
   "พร้อมเพย์",
@@ -134,18 +143,16 @@ export function createDraftFromFile(file) {
   const category = detected?.category || "อื่นๆ";
 
   return {
-    date: today,
-    budgetMonth: deriveBudgetMonth(today, category),
+    date: detected ? today : "",
+    budgetMonth: deriveBudgetMonth(detected ? today : "", category),
     type: "expense",
     category,
-    name: detected?.name || "รายการจากรูปใหม่",
+    name: detected?.name || "",
     amount: detected?.amount ?? "",
-    channel: detected?.channel || "SCB",
+    channel: detected?.channel || "อื่นๆ",
     nature: "ครั้งเดียว",
     status: "รอตรวจสอบ",
-    note: detected
-      ? "ตรวจพบข้อมูลจากรูปตัวอย่าง โปรดตรวจสอบก่อนยืนยัน"
-      : "ยังไม่ได้เชื่อม OCR/AI จริง โปรดกรอกข้อมูลจากหลักฐานก่อนยืนยัน",
+    note: detected ? "ตรวจพบข้อมูลจากรูปตัวอย่าง โปรดตรวจสอบก่อนยืนยัน" : "",
     fileName: file.name,
     fileType: file.type,
     previewUrl: file.type.startsWith("image/") ? URL.createObjectURL(file) : "",
