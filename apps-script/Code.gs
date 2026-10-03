@@ -34,6 +34,9 @@ function doPost(event) {
       case "listTransactions":
         data = { transactions: listTransactions_() };
         break;
+      case "getTransactionEvidence":
+        data = getTransactionEvidence_(request.transactionId);
+        break;
       case "restoreMonthTransactions":
         data = restoreMonthTransactions_(request.budgetMonth);
         break;
@@ -96,6 +99,37 @@ function listTransactions_() {
   }).reverse();
 }
 
+function getTransactionEvidence_(transactionId) {
+  const id = String(transactionId || "").trim();
+  if (!id || id.length > 80) throw new Error("Transaction ID is invalid");
+
+  const sheet = getTransactionsSheet_();
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getDisplayValues()[0];
+  const columns = headerIndexes_(headers);
+  const rowNumber = findTransactionRow_(sheet, columns["Transaction ID"], id);
+  if (rowNumber < 2) throw new Error("Transaction was not found");
+
+  const row = sheet.getRange(rowNumber, 1, 1, headers.length).getValues()[0];
+  const evidenceUrl = String(readCell_(row, columns, "ลิงก์หลักฐาน Drive") || "");
+  const rootFolder = getDriveFolder_();
+  const file = getEvidenceFileFromUrl_(evidenceUrl) || findEvidenceFileByTransactionId_(rootFolder, id);
+  if (!file || !isEvidenceFileInEvidenceTree_(file, rootFolder)) throw new Error("Evidence file was not found in the configured Drive folder");
+  if (file.getSize() > 3 * 1024 * 1024) throw new Error("Evidence file is too large to preview");
+
+  const blob = file.getBlob();
+  const bytes = blob.getBytes();
+  if (bytes.length > 3 * 1024 * 1024) throw new Error("Evidence file is too large to preview");
+  const mimeType = String(blob.getContentType() || file.getMimeType() || "application/octet-stream").toLowerCase();
+  const allowedTypes = ["image/jpeg", "image/png", "image/webp", "image/heic", "image/heif", "application/pdf"];
+  if (allowedTypes.indexOf(mimeType) < 0) throw new Error("Evidence file type cannot be previewed");
+
+  return {
+    mimeType: mimeType,
+    fileName: file.getName(),
+    base64: Utilities.base64Encode(bytes),
+  };
+}
+
 function saveTransaction_(input, evidence) {
   if (!input || typeof input !== "object") throw new Error("Transaction is required");
   const amount = Number(input.amount);
@@ -131,7 +165,8 @@ function saveTransaction_(input, evidence) {
       }
     }
 
-    const rowNumber = existingRow > 0 ? existingRow : sheet.getLastRow() + 1;
+    const rowNumber = existingRow > 0 ? existingRow : Math.max(sheet.getLastRow() + 1, 2);
+    ensureSheetRowCapacity_(sheet, rowNumber);
     const row = existingRow > 0
       ? sheet.getRange(rowNumber, 1, 1, headers.length).getValues()[0]
       : new Array(headers.length).fill("");
@@ -375,6 +410,21 @@ function isEvidenceFileInFolder_(file, folder) {
   return false;
 }
 
+function isEvidenceFileInEvidenceTree_(file, rootFolder) {
+  const allowedParentIds = [rootFolder.getId()];
+  const folderNames = ["01_รายรับ", "02_รายจ่ายประจำ", "03_รายจ่ายผันแปร", "99_รอตรวจสอบ"];
+  folderNames.forEach(function (folderName) {
+    const folders = rootFolder.getFoldersByName(folderName);
+    if (folders.hasNext()) allowedParentIds.push(folders.next().getId());
+  });
+
+  const parents = file.getParents();
+  while (parents.hasNext()) {
+    if (allowedParentIds.indexOf(parents.next().getId()) >= 0) return true;
+  }
+  return false;
+}
+
 function transactionFromRow_(row, columns) {
   const typeValue = String(readCell_(row, columns, "ประเภท") || "");
   const evidenceUrl = String(readCell_(row, columns, "ลิงก์หลักฐาน Drive") || "");
@@ -401,6 +451,13 @@ function getTransactionsSheet_() {
   if (!sheet) throw new Error("Transactions sheet was not found");
   validateHeaders_(sheet);
   return sheet;
+}
+
+function ensureSheetRowCapacity_(sheet, requiredRow) {
+  const maxRows = sheet.getMaxRows();
+  if (requiredRow > maxRows) {
+    sheet.insertRowsAfter(maxRows, requiredRow - maxRows);
+  }
 }
 
 function getSpreadsheet_() {

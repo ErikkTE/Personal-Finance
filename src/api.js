@@ -49,6 +49,29 @@ export async function listTransactions() {
   return result.transactions;
 }
 
+export async function getEvidencePreview(transactionId, signal) {
+  const response = await fetch(`/api/evidence?id=${encodeURIComponent(transactionId)}`, {
+    credentials: "same-origin",
+    cache: "no-store",
+    signal,
+    headers: { Accept: "image/*, application/pdf" },
+  });
+  if (!response.ok) {
+    let message = "เปิดภาพหลักฐานไม่สำเร็จ";
+    try {
+      const result = await response.json();
+      message = result.error || message;
+    } catch { /* Keep the short fallback message for non-JSON errors. */ }
+    throw new Error(message);
+  }
+
+  const blob = await response.blob();
+  if (!blob.type.startsWith("image/") && blob.type !== "application/pdf") {
+    throw new Error("ไฟล์นี้ไม่สามารถแสดงตัวอย่างได้");
+  }
+  return { url: URL.createObjectURL(blob), mimeType: blob.type };
+}
+
 function fileToBase64(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
