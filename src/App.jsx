@@ -786,7 +786,18 @@ function RuleItem({ title, detail }) {
   return <div className="rule-item"><span className="rule-check"><Icon name="check" size={15} /></span><span><strong>{title}</strong><small>{detail}</small></span></div>;
 }
 
-function SavedEvidencePreview({ transactionId }) {
+function getDriveThumbnailUrl(evidenceUrl) {
+  try {
+    const url = new URL(evidenceUrl);
+    if (!['drive.google.com', 'docs.google.com'].includes(url.hostname)) return '';
+    const fileId = url.pathname.match(/\/d\/([-A-Za-z0-9_]+)/)?.[1] || url.searchParams.get('id');
+    return fileId ? `https://drive.google.com/thumbnail?id=${encodeURIComponent(fileId)}&sz=w1200` : '';
+  } catch {
+    return '';
+  }
+}
+
+function SavedEvidencePreview({ transactionId, evidenceUrl }) {
   const [preview, setPreview] = useState({ state: "loading", url: "", mimeType: "" });
 
   useEffect(() => {
@@ -799,14 +810,18 @@ function SavedEvidencePreview({ transactionId }) {
         setPreview({ state: "ready", url: result.url, mimeType: result.mimeType });
       })
       .catch(() => {
-        if (!controller.signal.aborted) setPreview({ state: "failed", url: "", mimeType: "" });
+        if (controller.signal.aborted) return;
+        const thumbnailUrl = getDriveThumbnailUrl(evidenceUrl);
+        setPreview(thumbnailUrl
+          ? { state: "fallback", url: thumbnailUrl, mimeType: "image/*" }
+          : { state: "failed", url: "", mimeType: "" });
       });
 
     return () => {
       controller.abort();
       if (previewUrl) URL.revokeObjectURL(previewUrl);
     };
-  }, [transactionId]);
+  }, [transactionId, evidenceUrl]);
 
   if (preview.state === "loading") {
     return <div className="preview-empty"><Icon name="image" size={27} /><span>กำลังโหลดภาพหลักฐานจาก Drive…</span></div>;
@@ -817,7 +832,7 @@ function SavedEvidencePreview({ transactionId }) {
   if (preview.mimeType === "application/pdf") {
     return <iframe className="evidence-pdf-preview" src={preview.url} title="หลักฐาน PDF ใน Google Drive" />;
   }
-  return <img src={preview.url} alt="หลักฐานรายการจาก Google Drive" onError={() => setPreview((current) => ({ ...current, state: "failed" }))} />;
+  return <img src={preview.url} alt="หลักฐานรายการจาก Google Drive" onError={() => setPreview((current) => ({ ...current, state: "failed", url: "" }))} />;
 }
 
 function ReviewModal({ draft, monthChoices, transactionNameOptions, saving, storageMode, onChange, onAttachEvidence, onClose, onConfirm }) {
@@ -853,7 +868,7 @@ function ReviewModal({ draft, monthChoices, transactionNameOptions, saving, stor
       <section className="review-modal" role="dialog" aria-modal="true" aria-labelledby="review-title">
         <div className="modal-header"><div><span className="modal-kicker">{isPending ? "ดำเนินการบันทึกต่อ" : isExisting ? "รายละเอียดรายการ" : "ตรวจสอบข้อมูลจากสลิป"}</span><h2 id="review-title">{isExisting || isPending ? draft.name : "รายการใหม่จากหลักฐาน"}</h2></div><button className="icon-button" aria-label="ปิดหน้าต่าง" onClick={onClose}><Icon name="close" size={21} /></button></div>
         <div className="review-body">
-          <div className="receipt-preview">{draft.previewUrl ? <img src={draft.previewUrl} alt="ตัวอย่างหลักฐานที่อัปโหลด" /> : draft.evidenceUrl && draft.transactionId && storageMode === "google" ? <SavedEvidencePreview transactionId={draft.transactionId} /> : <div className="preview-empty"><Icon name="image" size={27} /><span>{draft.fileName || "ไม่มีภาพตัวอย่าง"}</span></div>}{draft.evidenceUrl && <a className="evidence-link" href={draft.evidenceUrl} target="_blank" rel="noreferrer">เปิดหลักฐานใน Google Drive</a>}<span className="preview-status" aria-live="polite"><Icon name={draft.ocrStatus === "done" ? "check" : "info"} size={13} />{isExisting ? "หลักฐานของรายการนี้" : isOcrProcessing ? `${ocrProgressLabel(draft.ocrPhase)}${draft.ocrProgress > 0 ? ` ${draft.ocrProgress}%` : "…"}` : draft.ocrStatus === "done" ? "อ่านข้อความแล้ว · กรุณาตรวจสอบ" : draft.ocrStatus === "unsupported" ? "ไฟล์นี้ยังอ่านอัตโนมัติไม่ได้" : draft.ocrStatus === "failed" || draft.ocrStatus === "empty" || draft.ocrStatus === "unrecognized" ? "กรุณาตรวจหรือกรอกข้อมูลเอง" : "รอตรวจสอบข้อมูล"}</span></div>
+          <div className="receipt-preview">{draft.previewUrl ? <img src={draft.previewUrl} alt="ตัวอย่างหลักฐานที่อัปโหลด" /> : draft.evidenceUrl && draft.transactionId && storageMode === "google" ? <SavedEvidencePreview transactionId={draft.transactionId} evidenceUrl={draft.evidenceUrl} /> : <div className="preview-empty"><Icon name="image" size={27} /><span>{draft.fileName || "ไม่มีภาพตัวอย่าง"}</span></div>}{draft.evidenceUrl && <a className="evidence-link" href={draft.evidenceUrl} target="_blank" rel="noreferrer">เปิดหลักฐานใน Google Drive</a>}<span className="preview-status" aria-live="polite"><Icon name={draft.ocrStatus === "done" ? "check" : "info"} size={13} />{isExisting ? "หลักฐานของรายการนี้" : isOcrProcessing ? `${ocrProgressLabel(draft.ocrPhase)}${draft.ocrProgress > 0 ? ` ${draft.ocrProgress}%` : "…"}` : draft.ocrStatus === "done" ? "อ่านข้อความแล้ว · กรุณาตรวจสอบ" : draft.ocrStatus === "unsupported" ? "ไฟล์นี้ยังอ่านอัตโนมัติไม่ได้" : draft.ocrStatus === "failed" || draft.ocrStatus === "empty" || draft.ocrStatus === "unrecognized" ? "กรุณาตรวจหรือกรอกข้อมูลเอง" : "รอตรวจสอบข้อมูล"}</span></div>
           <div className="review-form">
             {!isExisting && <div className={`review-note review-note-${draft.ocrStatus || "idle"}`} data-state={draft.ocrStatus || "idle"} role="status" aria-live="polite"><Icon name={draft.ocrStatus === "done" ? "check" : "info"} size={16} /><span>{reviewMessage}{isOcrProcessing && <span className="ocr-progress" role="progressbar" aria-label="ความคืบหน้าการอ่านข้อความ" aria-valuemin="0" aria-valuemax="100" aria-valuenow={draft.ocrProgress}><span style={{ width: `${draft.ocrProgress}%` }} /></span>}</span></div>}
             {!isExisting && qrReviewMessage && <div className={`qr-review-note${draft.ocrQrAmountMismatch ? " qr-review-note-warning" : ""}`} role="status"><Icon name={draft.ocrQrAmountMismatch ? "info" : "check"} size={15} /><span>{qrReviewMessage}</span></div>}
