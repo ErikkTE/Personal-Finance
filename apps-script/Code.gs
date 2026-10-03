@@ -158,13 +158,11 @@ function saveTransaction_(input, evidence) {
     sheet.getRange(rowNumber, columns["วันที่เกิดรายการ"] + 1).setNumberFormat("yyyy-mm-dd");
 
     if (shouldSyncEvidence) {
-      if (!evidence && !evidenceUrl) throw new Error("Pending transaction is missing its receipt");
-
       const rootFolder = getDriveFolder_();
       const destinationFolder = getEvidenceDestinationFolder_(rootFolder, input);
       const uploadedFile = preparedEvidence
         ? saveEvidence_(preparedEvidence, id, rootFolder)
-        : getEvidenceFileFromUrl_(evidenceUrl);
+        : getEvidenceFileFromUrl_(evidenceUrl) || findEvidenceFileByTransactionId_(rootFolder, id);
       if (!uploadedFile) throw new Error("Pending receipt file was not found");
 
       evidenceUrl = uploadedFile.getUrl();
@@ -296,7 +294,7 @@ function prepareEvidence_(evidence) {
 function saveEvidence_(evidence, transactionId, rootFolder) {
   const safeId = String(transactionId || "").replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 80);
   const fileName = "TX-" + safeId + "__" + evidence.originalName;
-  const existingFile = findEvidenceFile_(rootFolder, fileName);
+  const existingFile = findEvidenceFile_(rootFolder, fileName) || findEvidenceFileByTransactionId_(rootFolder, safeId);
   if (existingFile) return existingFile;
 
   const blob = Utilities.newBlob(evidence.bytes, evidence.mimeType, fileName);
@@ -331,6 +329,29 @@ function findEvidenceFile_(rootFolder, fileName) {
     if (!folders.hasNext()) continue;
     const files = folders.next().getFilesByName(fileName);
     if (files.hasNext()) return files.next();
+  }
+  return null;
+}
+
+function findEvidenceFileByTransactionId_(rootFolder, transactionId) {
+  const safeId = String(transactionId || "").replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 80);
+  if (!safeId) return null;
+  const prefix = "TX-" + safeId + "__";
+  const folderNames = ["", "01_รายรับ", "02_รายจ่ายประจำ", "03_รายจ่ายผันแปร", "99_รอตรวจสอบ"];
+
+  for (let index = 0; index < folderNames.length; index += 1) {
+    const folderName = folderNames[index];
+    let folder = rootFolder;
+    if (folderName) {
+      const folders = rootFolder.getFoldersByName(folderName);
+      if (!folders.hasNext()) continue;
+      folder = folders.next();
+    }
+    const files = folder.getFiles();
+    while (files.hasNext()) {
+      const file = files.next();
+      if (file.getName().indexOf(prefix) === 0) return file;
+    }
   }
   return null;
 }

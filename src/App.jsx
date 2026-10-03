@@ -189,6 +189,17 @@ function App() {
     fileInputRef.current?.click();
   }
 
+  function openTransaction(transaction) {
+    const isPending = transaction.status === "รอตรวจสอบ";
+    setDraft({
+      ...transaction,
+      fileName: transaction.evidenceName || transaction.fileName || "",
+      transactionId: transaction.id,
+      isPending,
+      isExisting: !isPending,
+    });
+  }
+
   function handleFiles(fileList) {
     const selectedFile = fileList?.[0];
     if (!selectedFile) return;
@@ -259,6 +270,31 @@ function App() {
         ? { ...current, ocrStatus: "failed", ocrPhase: "", ocrProgress: 0 }
         : current);
     });
+  }
+
+  function attachPendingEvidence(selectedFile) {
+    if (!selectedFile) return;
+    if (selectedFile.size > 3 * 1024 * 1024) {
+      setToast("ไฟล์หลักฐานต้องมีขนาดไม่เกิน 3 MB");
+      return;
+    }
+    const fileMimeByExtension = {
+      jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", webp: "image/webp",
+      heic: "image/heic", heif: "image/heif", pdf: "application/pdf",
+    };
+    const extension = selectedFile.name.split(".").pop()?.toLowerCase();
+    const mimeType = fileMimeByExtension[extension] || selectedFile.type;
+    if (!["image/jpeg", "image/png", "image/webp", "image/heic", "image/heif", "application/pdf"].includes(mimeType)) {
+      setToast("รองรับเฉพาะ JPG, PNG, WebP, HEIC, HEIF และ PDF");
+      return;
+    }
+    const file = selectedFile.type === mimeType ? selectedFile : new File([selectedFile], selectedFile.name, { type: mimeType, lastModified: selectedFile.lastModified });
+    setDraft((current) => current?.isPending ? {
+      ...current,
+      sourceFile: file,
+      fileName: file.name,
+      previewUrl: file.type.startsWith("image/") ? URL.createObjectURL(file) : "",
+    } : current);
   }
 
   function updateDraft(field, value) {
@@ -399,19 +435,15 @@ function App() {
               selectedMonth={selectedMonth}
               onUpload={openUpload}
               onNavigate={setActiveView}
-              onSelectTransaction={(transaction) => {
-                setDraft({ ...transaction, fileName: transaction.evidenceName, isExisting: true });
-              }}
+              onSelectTransaction={openTransaction}
             />
           )}
-          {activeView === "upload" && <UploadView onUpload={openUpload} transactions={transactions} onReview={(item) => setDraft({ ...item, isExisting: true })} />}
+          {activeView === "upload" && <UploadView onUpload={openUpload} transactions={transactions} onReview={openTransaction} />}
           {activeView === "history" && (
             <HistoryView
               transactions={transactions}
               selectedMonth={selectedMonth}
-              onSelectTransaction={(transaction) => {
-                setDraft({ ...transaction, fileName: transaction.evidenceName, isExisting: true });
-              }}
+              onSelectTransaction={openTransaction}
               connection={connection}
               onRemove={removeTransaction}
               hiddenTransactions={hiddenTransactions.filter((item) => item.budgetMonth === selectedMonth)}
@@ -433,7 +465,7 @@ function App() {
         }}
       />
       {draft && (
-        <ReviewModal draft={draft} monthChoices={monthChoices} saving={saving} storageMode={runtime.mode} onChange={updateDraft} onClose={closeDraft} onConfirm={confirmDraft} />
+        <ReviewModal draft={draft} monthChoices={monthChoices} saving={saving} storageMode={runtime.mode} onChange={updateDraft} onAttachEvidence={attachPendingEvidence} onClose={closeDraft} onConfirm={confirmDraft} />
       )}
       {showSettings && <ConnectionDialog connection={connection} onClose={() => setShowSettings(false)} onLogout={handleLogout} onRetry={retryGoogleConnection} />}
       {toast && <div className="toast"><Icon name="check" size={17} />{toast}</div>}
@@ -739,8 +771,9 @@ function RuleItem({ title, detail }) {
   return <div className="rule-item"><span className="rule-check"><Icon name="check" size={15} /></span><span><strong>{title}</strong><small>{detail}</small></span></div>;
 }
 
-function ReviewModal({ draft, monthChoices, saving, storageMode, onChange, onClose, onConfirm }) {
-  const isExisting = draft.isExisting;
+function ReviewModal({ draft, monthChoices, saving, storageMode, onChange, onAttachEvidence, onClose, onConfirm }) {
+  const isPending = Boolean(draft.isPending);
+  const isExisting = Boolean(draft.isExisting) && !isPending;
   const isOcrProcessing = draft.ocrStatus === "reading";
   const fieldsDisabled = isExisting || isOcrProcessing;
   const imageSaveMessage = storageMode === "google"
@@ -769,12 +802,13 @@ function ReviewModal({ draft, monthChoices, saving, storageMode, onChange, onClo
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <section className="review-modal" role="dialog" aria-modal="true" aria-labelledby="review-title">
-        <div className="modal-header"><div><span className="modal-kicker">{isExisting ? "รายละเอียดรายการ" : "ตรวจสอบข้อมูลจากสลิป"}</span><h2 id="review-title">{isExisting ? draft.name : "รายการใหม่จากหลักฐาน"}</h2></div><button className="icon-button" aria-label="ปิดหน้าต่าง" onClick={onClose}><Icon name="close" size={21} /></button></div>
+        <div className="modal-header"><div><span className="modal-kicker">{isPending ? "ดำเนินการบันทึกต่อ" : isExisting ? "รายละเอียดรายการ" : "ตรวจสอบข้อมูลจากสลิป"}</span><h2 id="review-title">{isExisting || isPending ? draft.name : "รายการใหม่จากหลักฐาน"}</h2></div><button className="icon-button" aria-label="ปิดหน้าต่าง" onClick={onClose}><Icon name="close" size={21} /></button></div>
         <div className="review-body">
           <div className="receipt-preview">{draft.previewUrl ? <img src={draft.previewUrl} alt="ตัวอย่างหลักฐานที่อัปโหลด" /> : <div className="preview-empty"><Icon name="image" size={27} /><span>{draft.fileName || "ไม่มีภาพตัวอย่าง"}</span></div>}{draft.evidenceUrl && <a className="evidence-link" href={draft.evidenceUrl} target="_blank" rel="noreferrer">เปิดหลักฐานใน Google Drive</a>}<span className="preview-status" aria-live="polite"><Icon name={draft.ocrStatus === "done" ? "check" : "info"} size={13} />{isOcrProcessing ? `${ocrProgressLabel(draft.ocrPhase)}${draft.ocrProgress > 0 ? ` ${draft.ocrProgress}%` : "…"}` : draft.ocrStatus === "done" ? "อ่านข้อความแล้ว · กรุณาตรวจสอบ" : draft.ocrStatus === "unsupported" ? "ไฟล์นี้ยังอ่านอัตโนมัติไม่ได้" : draft.ocrStatus === "failed" || draft.ocrStatus === "empty" || draft.ocrStatus === "unrecognized" ? "กรุณาตรวจหรือกรอกข้อมูลเอง" : "รอตรวจสอบข้อมูล"}</span></div>
           <div className="review-form">
             {!isExisting && <div className={`review-note review-note-${draft.ocrStatus || "idle"}`} data-state={draft.ocrStatus || "idle"} role="status" aria-live="polite"><Icon name={draft.ocrStatus === "done" ? "check" : "info"} size={16} /><span>{reviewMessage}{isOcrProcessing && <span className="ocr-progress" role="progressbar" aria-label="ความคืบหน้าการอ่านข้อความ" aria-valuemin="0" aria-valuemax="100" aria-valuenow={draft.ocrProgress}><span style={{ width: `${draft.ocrProgress}%` }} /></span>}</span></div>}
             {!isExisting && qrReviewMessage && <div className={`qr-review-note${draft.ocrQrAmountMismatch ? " qr-review-note-warning" : ""}`} role="status"><Icon name={draft.ocrQrAmountMismatch ? "info" : "check"} size={15} /><span>{qrReviewMessage}</span></div>}
+            {isPending && <label>แนบไฟล์ใหม่ หากระบบหารูปเดิมใน Drive ไม่พบ<input type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif,application/pdf" onChange={(event) => { onAttachEvidence(event.target.files?.[0]); event.target.value = ""; }} /></label>}
             <label>วันที่เกิดรายการ<input type="date" value={draft.date || ""} onChange={(event) => onChange("date", event.target.value)} disabled={fieldsDisabled} /></label>
             <label>รายการ<input type="text" value={draft.name || ""} onChange={(event) => onChange("name", event.target.value)} disabled={fieldsDisabled} /></label>
             <label>จำนวนเงิน (บาท)<input type="number" min="0" step="0.01" value={draft.amount ?? ""} onChange={(event) => onChange("amount", event.target.value)} disabled={fieldsDisabled} /></label>
@@ -784,7 +818,7 @@ function ReviewModal({ draft, monthChoices, saving, storageMode, onChange, onClo
             {draft.ocrText && <details className="ocr-text-details"><summary>ดูข้อความที่ OCR อ่านได้</summary><pre>{draft.ocrText}</pre></details>}
           </div>
         </div>
-        <div className="modal-footer"><button className="secondary-button" onClick={onClose} disabled={saving}>{isExisting ? "ปิด" : "ยกเลิก"}</button>{!isExisting && <button className="primary-button" onClick={onConfirm} disabled={saving || isOcrProcessing}>{saving ? "กำลังบันทึก…" : isOcrProcessing ? "กำลังอ่านสลิป…" : <><Icon name="check" size={17} />ยืนยันรายการ</>}</button>}</div>
+        <div className="modal-footer"><button className="secondary-button" onClick={onClose} disabled={saving}>{isExisting ? "ปิด" : "ยกเลิก"}</button>{!isExisting && <button className="primary-button" onClick={onConfirm} disabled={saving || isOcrProcessing}>{saving ? "กำลังบันทึก…" : isOcrProcessing ? "กำลังอ่านสลิป…" : <><Icon name="check" size={17} />{isPending ? "บันทึกต่อ" : "ยืนยันรายการ"}</>}</button>}</div>
       </section>
     </div>
   );
