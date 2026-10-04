@@ -259,6 +259,18 @@ button:focus-visible, [role="button"]:focus-visible, input:focus-visible, select
 .toast { position: fixed; right: 23px; bottom: 24px; z-index: 50; display: flex; align-items: center; gap: 8px; max-width: min(420px, calc(100vw - 40px)); padding: 12px 15px; border: 1px solid #b8e9ce; border-radius: 11px; color: #087443; background: #effcf5; box-shadow: 0 14px 32px rgba(16,24,40,.13); font-size: 12px; font-weight: 600; }
 .mobile-nav { display: none; }
 
+.active-view { min-width: 0; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .active-view { animation: view-enter .2s cubic-bezier(.2,.7,.25,1) both; }
+  button:not(:disabled):active { transform: scale(.98); }
+}
+
+@keyframes view-enter {
+  from { opacity: 0; transform: translateY(5px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
 .installment-page { animation: installment-page-in .36s cubic-bezier(.2,.75,.25,1) both; }
 .installment-kicker { display: inline-flex; align-items: center; gap: 6px; margin-bottom: 8px; color: var(--blue-deep); font-size: 11px; font-weight: 700; }
 .installment-add-button { min-height: 46px; white-space: nowrap; transition: transform .18s ease, box-shadow .18s ease, background .18s ease; }
@@ -417,13 +429,13 @@ button:focus-visible, [role="button"]:focus-visible, input:focus-visible, select
 }
 
 @media (max-width: 1120px) {
-  .sidebar { width: 88px; padding: 24px 12px 18px; }
+  .sidebar { width: 76px; padding: 24px 10px 18px; }
   .brand-lockup { justify-content: center; padding: 0 0 28px; }
   .brand-lockup > div:last-child, .nav-item span, .sync-card .sync-copy { display: none; }
-  .nav-item { justify-content: center; padding: 13px 11px; }
+  .nav-item { min-height: 48px; justify-content: center; padding: 13px 10px; }
   .nav-item.active { box-shadow: 0 8px 18px rgba(0, 0, 0, .1); }
   .sync-card { justify-content: center; margin-inline: 0; padding: 10px; }
-  .main-area { width: calc(100% - 88px); margin-left: 88px; }
+  .main-area { width: calc(100% - 76px); margin-left: 76px; }
   .topbar { gap: 13px; padding-inline: clamp(20px, 3vw, 36px); }
   .topbar-title { min-width: 0; flex: 1; }
   .topbar-title span { display: none; }
@@ -466,16 +478,18 @@ button:focus-visible, [role="button"]:focus-visible, input:focus-visible, select
   body { padding-bottom: calc(78px + env(safe-area-inset-bottom)); }
   .sidebar { display: none; }
   .main-area { width: 100%; margin-left: 0; }
-  .topbar { min-height: 66px; flex-wrap: wrap; gap: 10px; padding: max(12px, env(safe-area-inset-top)) 16px 11px; }
-  .mobile-brand { display: flex; align-items: center; gap: 8px; min-width: 0; margin-right: auto; color: var(--navy); font-size: 13px; }
+  .topbar { min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "brand actions" "month month"; align-items: center; gap: 8px 10px; padding: max(14px, calc(env(safe-area-inset-top) + 8px)) 14px 10px; }
+  .topbar-installments { grid-template-areas: "brand actions"; }
+  .mobile-brand { grid-area: brand; display: flex; align-items: center; gap: 8px; min-width: 0; margin: 0; color: var(--navy); font-size: 13px; }
   .mobile-brand .brand-mark { width: 30px; height: 30px; border-radius: 10px; }
   .topbar-title { display: none; }
-  .topbar-actions { order: initial; margin-left: 0; }
+  .topbar-actions { grid-area: actions; justify-self: end; order: initial; margin-left: 0; }
   .topbar-actions .icon-button { width: 44px; height: 44px; }
   .connection-chip { width: 44px; height: 44px; justify-content: center; padding: 0; }
   .connection-dot { width: 26px; height: 26px; }
-  .month-control { order: 4; width: 100%; justify-content: space-between; border-radius: 14px; }
-  .month-control select { flex: 1; min-width: 0; text-align: center; font-size: 16px; }
+  .month-control { grid-area: month; order: initial; width: 100%; min-height: 48px; justify-content: space-between; border-radius: 14px; }
+  .month-control .icon-button.small { width: 44px; height: 44px; }
+  .month-control select { flex: 1; min-width: 0; min-height: 44px; text-align: center; font-size: 16px; }
   .top-upload { display: none; }
   .content-area { padding: 25px 16px calc(40px + env(safe-area-inset-bottom)); }
   .page-stack { gap: 18px; }
