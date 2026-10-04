@@ -15,6 +15,7 @@ import {
 } from "./data";
 import {
   addMonths,
+  calculateInstallmentAmounts,
   currentInstallmentMonth,
   installmentBanks,
   installmentMonthLabel,
@@ -990,7 +991,7 @@ function InstallmentPlanCard({ plan, index, updatingPayment, onTogglePayment }) 
         <div className="installment-plan-title">
           <span className="installment-plan-bank">{bank.label} · {plan.months} เดือน · เริ่ม {installmentMonthLabel(plan.startMonth, { short: true })}</span>
           <h3>{plan.name}</h3>
-          <span className="installment-plan-price">ราคาสินค้า ฿ {formatNumber(plan.price)}{plan.interestRate ? ` · ดอกเบี้ยรวม ${plan.interestRate}%` : " · ดอกเบี้ย 0%"}</span>
+          <span className="installment-plan-price">ราคาสินค้า ฿ {formatNumber(plan.price)} · ดาวน์ ฿ {formatNumber(plan.downPayment)}{plan.interestRate ? ` · ดอกเบี้ย ${plan.interestRate}%` : " · ดอกเบี้ย 0%"}</span>
         </div>
         <div className="installment-plan-amount"><strong>฿ {formatNumber(monthlyAmount)}</strong><span>ค่างวดต่อเดือน</span></div>
         <button className={`icon-button installment-expand ${expanded ? "is-expanded" : ""}`} type="button" aria-label={expanded ? "ซ่อนตารางงวด" : "แสดงตารางงวด"} aria-expanded={expanded} onClick={() => setExpanded((value) => !value)}><Icon name="chevronRight" size={18} /></button>
@@ -1002,7 +1003,7 @@ function InstallmentPlanCard({ plan, index, updatingPayment, onTogglePayment }) 
       </div>
       {expanded && (
         <div className="installment-schedule-wrap">
-          <div className="installment-schedule-title"><div><h4>ตารางชำระรายเดือน</h4><span>ยอดงวดสุดท้ายปรับสตางค์ให้ยอดรวมตรงกับราคาและดอกเบี้ย</span></div></div>
+          <div className="installment-schedule-title"><div><h4>ตารางชำระรายเดือน</h4><span>ค่างวดคำนวณหลังหักเงินดาวน์ และปรับสตางค์ในงวดสุดท้าย</span></div></div>
           <div className="installment-schedule-table" role="table" aria-label={`ตารางผ่อน ${plan.name}`}>
             <div className="installment-schedule-row installment-schedule-head" role="row"><span role="columnheader">งวด</span><span role="columnheader">เดือน</span><span role="columnheader">จำนวนเงิน</span><span role="columnheader">สถานะ</span></div>
             {plan.schedule.map((payment) => {
@@ -1034,16 +1035,18 @@ function InstallmentFormModal({ saving, onClose, onSave }) {
     id: "",
     name: "",
     price: "",
+    downPayment: "0",
     interestRate: "0",
     months: "10",
     bank: "กสิกรไทย",
     startMonth: currentInstallmentMonth(),
   }));
   const price = Number(form.price);
+  const downPayment = Number(form.downPayment || 0);
   const rate = Number(form.interestRate);
   const months = Number(form.months);
-  const total = price > 0 && rate >= 0 ? Math.round(price * (1 + rate / 100) * 100) / 100 : 0;
-  const regularPayment = months > 0 ? Math.floor((total / months) * 100) / 100 : 0;
+  const amounts = calculateInstallmentAmounts({ price: price || 0, downPayment, interestRate: rate });
+  const regularPayment = months > 0 ? Math.floor((amounts.installmentTotal / months) * 100) / 100 : 0;
 
   function change(field, value) {
     setForm((current) => ({ ...current, [field]: value }));
@@ -1053,7 +1056,7 @@ function InstallmentFormModal({ saving, onClose, onSave }) {
     event.preventDefault();
     const id = form.id || globalThis.crypto?.randomUUID?.() || `INS-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     setForm((current) => ({ ...current, id }));
-    await onSave({ ...form, id, price, interestRate: rate, months });
+    await onSave({ ...form, id, price, downPayment, interestRate: rate, months });
   }
 
   return (
@@ -1069,12 +1072,13 @@ function InstallmentFormModal({ saving, onClose, onSave }) {
               <label>ชื่อรายการสินค้า<input autoFocus maxLength={120} required placeholder="เช่น iPad Air, โทรศัพท์" value={form.name} onChange={(event) => change("name", event.target.value)} /></label>
               <div className="form-two-col">
                 <label>ราคาสินค้า (บาท)<input type="number" min="0.01" max="100000000" step="0.01" required placeholder="เช่น 25000" value={form.price} onChange={(event) => change("price", event.target.value)} /></label>
-                <label>ดอกเบี้ยรวมตลอดแผน (%)<input type="number" min="0" max="100" step="0.01" required value={form.interestRate} onChange={(event) => change("interestRate", event.target.value)} /><small className="installment-field-hint">เริ่มต้น 0% · ถ้าไม่มีดอกเบี้ยให้คงค่าเดิม</small></label>
+                <label>เงินดาวน์ (บาท)<input type="number" min="0" max={price > 0 ? Math.max(0, price - 0.01) : 0} step="0.01" required value={form.downPayment} onChange={(event) => change("downPayment", event.target.value)} /><small className="installment-field-hint">หักออกจากราคาก่อนคำนวณดอกเบี้ย</small></label>
               </div>
               <div className="form-two-col">
+                <label>ดอกเบี้ยรวมตลอดแผน (%)<input type="number" min="0" max="100" step="0.01" required value={form.interestRate} onChange={(event) => change("interestRate", event.target.value)} /><small className="installment-field-hint">เริ่มต้น 0% · คิดจากยอดหลังหักเงินดาวน์</small></label>
                 <label>จำนวนเดือน<input type="number" min="1" max="60" step="1" required value={form.months} onChange={(event) => change("months", event.target.value)} /></label>
-                <label>เริ่มชำระเดือน<input type="month" required value={form.startMonth} onChange={(event) => change("startMonth", event.target.value)} /></label>
               </div>
+              <label>เริ่มชำระเดือน<input type="month" required value={form.startMonth} onChange={(event) => change("startMonth", event.target.value)} /></label>
               <fieldset className="installment-bank-picker">
                 <legend>ธนาคารเจ้าของบัตร</legend>
                 <div>{installmentBanks.map((bank) => <button key={bank.value} className={`installment-bank-choice ${form.bank === bank.value ? "selected" : ""}`} type="button" aria-pressed={form.bank === bank.value} onClick={() => change("bank", bank.value)}><span className={`installment-bank-mark bank-${bank.tone}`}>{bank.short}</span><span>{bank.label}</span><span className="bank-choice-check"><Icon name="check" size={13} /></span></button>)}</div>
@@ -1084,15 +1088,17 @@ function InstallmentFormModal({ saving, onClose, onSave }) {
               <span className="installment-preview-icon"><Icon name="chart" size={19} /></span>
               <small>ประมาณการยอดผ่อน</small>
               <strong>฿ {formatNumber(regularPayment)}<em> / เดือน</em></strong>
-              <div><span>เงินต้น</span><b>฿ {formatNumber(price || 0)}</b></div>
-              <div><span>ดอกเบี้ยรวม</span><b>฿ {formatNumber(total - (price || 0))}</b></div>
-              <div className="preview-total"><span>ยอดชำระรวม</span><b>฿ {formatNumber(total)}</b></div>
-              <p>หารยอดรวมเป็นงวดเท่า ๆ กัน โดยปรับเศษสตางค์ในงวดสุดท้าย</p>
+              <div><span>เงินดาวน์ (ชำระวันนี้)</span><b>฿ {formatNumber(amounts.downPayment)}</b></div>
+              <div><span>ยอดหลังหักเงินดาวน์</span><b>฿ {formatNumber(amounts.financedAmount)}</b></div>
+              <div><span>ดอกเบี้ยรวม</span><b>฿ {formatNumber(amounts.interestAmount)}</b></div>
+              <div><span>ยอดผ่อนรวม</span><b>฿ {formatNumber(amounts.installmentTotal)}</b></div>
+              <div className="preview-total"><span>รวมจ่ายทั้งหมด</span><b>฿ {formatNumber(amounts.totalAmount)}</b></div>
+              <p>คิดดอกเบี้ยจากยอดคงเหลือหลังหักเงินดาวน์ แบ่งจ่ายรายเดือนและปรับเศษสตางค์ในงวดสุดท้าย</p>
             </aside>
           </div>
           <footer className="modal-footer">
             <button className="secondary-button" type="button" onClick={onClose} disabled={saving}>ยกเลิก</button>
-            <button className="primary-button" type="submit" disabled={saving || !form.name.trim() || !(price > 0) || !(months > 0)}><Icon name={saving ? "clock" : "check"} size={16} />{saving ? "กำลังบันทึก…" : "บันทึกแผนผ่อน"}</button>
+            <button className="primary-button" type="submit" disabled={saving || !form.name.trim() || !(price > 0) || downPayment < 0 || downPayment >= price || !(months > 0)}><Icon name={saving ? "clock" : "check"} size={16} />{saving ? "กำลังบันทึก…" : "บันทึกแผนผ่อน"}</button>
           </footer>
         </form>
       </section>

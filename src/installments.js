@@ -25,13 +25,27 @@ export function installmentMonthLabel(month, { short = false } = {}) {
   }).format(new Date(Date.UTC(year, monthNumber - 1, 1)));
 }
 
-export function buildInstallmentSchedule(plan) {
-  const price = Number(plan.price);
+export function calculateInstallmentAmounts(plan) {
+  const price = Math.round(Number(plan.price || 0) * 100) / 100;
+  const downPayment = Math.round(Number(plan.downPayment || 0) * 100) / 100;
+  const financedAmount = Math.max(0, Math.round((price - downPayment) * 100) / 100);
   const interestRate = Number(plan.interestRate || 0);
+  const interestAmount = Math.round(financedAmount * interestRate) / 100;
+  const installmentTotal = Math.round((financedAmount + interestAmount) * 100) / 100;
+  return {
+    downPayment,
+    financedAmount,
+    interestAmount,
+    installmentTotal,
+    totalAmount: Math.round((downPayment + installmentTotal) * 100) / 100,
+  };
+}
+
+export function buildInstallmentSchedule(plan) {
   const months = Number(plan.months);
-  const totalAmount = Math.round(price * (1 + interestRate / 100) * 100) / 100;
-  const evenPayment = Math.floor((totalAmount / months) * 100) / 100;
-  let remaining = Math.round(totalAmount * 100);
+  const { installmentTotal } = calculateInstallmentAmounts(plan);
+  const evenPayment = Math.floor((installmentTotal / months) * 100) / 100;
+  let remaining = Math.round(installmentTotal * 100);
 
   return Array.from({ length: months }, (_, index) => {
     const amount = index === months - 1 ? remaining / 100 : evenPayment;
@@ -51,6 +65,7 @@ export function prepareInstallmentPlan(input) {
     id: input.id || globalThis.crypto?.randomUUID?.() || `INS-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     name: String(input.name || "").trim(),
     price: Math.round(Number(input.price) * 100) / 100,
+    downPayment: Math.round(Number(input.downPayment || 0) * 100) / 100,
     interestRate: Math.round(Number(input.interestRate || 0) * 100) / 100,
     months: Number(input.months),
     bank: String(input.bank || ""),
@@ -58,7 +73,7 @@ export function prepareInstallmentPlan(input) {
     createdAt: input.createdAt || new Date().toISOString(),
     schedule: [],
   };
-  plan.totalAmount = Math.round(plan.price * (1 + plan.interestRate / 100) * 100) / 100;
+  Object.assign(plan, calculateInstallmentAmounts(plan));
   plan.schedule = Array.isArray(input.schedule) && input.schedule.length
     ? input.schedule.map((item, index) => ({
         installmentNumber: Number(item.installmentNumber || index + 1),

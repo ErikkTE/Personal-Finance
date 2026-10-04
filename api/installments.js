@@ -12,8 +12,8 @@ function money(value) {
   return Math.round(Number(value) * 100) / 100;
 }
 
-function createSchedule(price, interestRate, months, startMonth) {
-  const totalAmount = money(price * (1 + interestRate / 100));
+function createSchedule(financedAmount, interestRate, months, startMonth) {
+  const totalAmount = money(financedAmount * (1 + interestRate / 100));
   const evenAmount = Math.floor((totalAmount / months) * 100) / 100;
   let remainingCents = Math.round(totalAmount * 100);
   const [year, month] = startMonth.split("-").map(Number);
@@ -35,28 +35,36 @@ function normalizePlan(input) {
   if (!input || typeof input !== "object") throw new Error("กรุณากรอกข้อมูลแผนผ่อนให้ครบ");
   const name = String(input.name || "").trim().slice(0, 120);
   const price = money(input.price);
+  const downPayment = money(input.downPayment ?? 0);
   const interestRate = money(input.interestRate ?? 0);
   const months = Number(input.months);
   const bank = String(input.bank || "");
   const startMonth = String(input.startMonth || "");
   if (!name) throw new Error("กรุณาระบุชื่อสินค้า");
   if (!Number.isFinite(price) || price <= 0 || price > 100_000_000) throw new Error("ราคาสินค้าไม่ถูกต้อง");
+  if (!Number.isFinite(downPayment) || downPayment < 0 || downPayment >= price) throw new Error("เงินดาวน์ต้องไม่ติดลบและต้องน้อยกว่าราคาสินค้า");
   if (!Number.isFinite(interestRate) || interestRate < 0 || interestRate > 100) throw new Error("ดอกเบี้ยรวมต้องอยู่ระหว่าง 0–100%");
   if (!Number.isInteger(months) || months < 1 || months > 60) throw new Error("จำนวนเดือนต้องอยู่ระหว่าง 1–60 เดือน");
   if (!BANKS.has(bank)) throw new Error("กรุณาเลือกธนาคารที่รองรับ");
   if (!validMonth(startMonth)) throw new Error("เดือนเริ่มชำระไม่ถูกต้อง");
 
+  const financedAmount = money(price - downPayment);
+  const installmentTotal = money(financedAmount * (1 + interestRate / 100));
   return {
     id: typeof input.id === "string" && /^[A-Za-z0-9_-]{8,80}$/.test(input.id) ? input.id : randomUUID(),
     name,
     price,
+    downPayment,
+    financedAmount,
     interestRate,
     months,
     bank,
     startMonth,
-    totalAmount: money(price * (1 + interestRate / 100)),
+    interestAmount: money(installmentTotal - financedAmount),
+    installmentTotal,
+    totalAmount: money(downPayment + installmentTotal),
     createdAt: new Date().toISOString(),
-    schedule: createSchedule(price, interestRate, months, startMonth),
+    schedule: createSchedule(financedAmount, interestRate, months, startMonth),
   };
 }
 
@@ -98,7 +106,7 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: "Method not allowed" });
   } catch (error) {
     const message = error instanceof Error ? error.message : "ไม่สามารถบันทึกแผนผ่อนได้";
-    const validationError = /ไม่ถูกต้อง|กรุณา|ต้องอยู่|ไม่พบรหัส/.test(message);
+    const validationError = /ไม่ถูกต้อง|กรุณา|ต้องอยู่|ต้องไม่ติดลบ|ไม่พบรหัส/.test(message);
     if (!validationError) console.error("Installments API request failed", { requestId, action, code: String(error?.code || "UPSTREAM_ERROR") });
     return res.status(validationError ? 400 : 502).json({
       error: validationError ? message : "เชื่อมต่อข้อมูลผ่อนชำระใน Google Sheets ไม่สำเร็จ",

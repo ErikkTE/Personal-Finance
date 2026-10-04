@@ -1,7 +1,7 @@
 const TAB_TRANSACTIONS = "Transactions";
 const TAB_INSTALLMENTS = "Installments";
 const TAB_INSTALLMENT_PAYMENTS = "Installment Payments";
-const INSTALLMENT_HEADERS = ["Installment ID", "รายการสินค้า", "ราคาสินค้า", "ดอกเบี้ยรวม (%)", "จำนวนเดือน", "ธนาคาร", "เดือนเริ่มชำระ", "ยอดรวม", "วันที่บันทึก"];
+const INSTALLMENT_HEADERS = ["Installment ID", "รายการสินค้า", "ราคาสินค้า", "เงินดาวน์", "ดอกเบี้ยรวม (%)", "จำนวนเดือน", "ธนาคาร", "เดือนเริ่มชำระ", "ยอดรวม", "วันที่บันทึก"];
 const INSTALLMENT_PAYMENT_HEADERS = ["Installment ID", "งวดที่", "เดือนครบกำหนด", "จำนวนเงิน", "ชำระแล้ว", "วันที่ชำระ"];
 const PREVIOUS_STATUS_HEADER = "สถานะก่อนซ่อน";
 const RESTORABLE_STATUSES = ["ยืนยันแล้ว", "รอตรวจสอบ"];
@@ -150,7 +150,7 @@ function listInstallments_() {
   const paymentSheet = spreadsheet.getSheetByName(TAB_INSTALLMENT_PAYMENTS);
   if (!installmentSheet && !paymentSheet) return [];
   if (!installmentSheet || !paymentSheet) throw new Error("Installment sheets are incomplete");
-  validateTableHeaders_(installmentSheet, INSTALLMENT_HEADERS, "Installments");
+  ensureTableHeaders_(installmentSheet, INSTALLMENT_HEADERS, "Installments");
   validateTableHeaders_(paymentSheet, INSTALLMENT_PAYMENT_HEADERS, "Installment Payments");
 
   const plansLastRow = installmentSheet.getLastRow();
@@ -193,6 +193,7 @@ function saveInstallment_(input) {
   const id = String(input.id || "").trim();
   const name = String(input.name || "").trim().slice(0, 120);
   const price = Number(input.price);
+  const downPayment = Number(input.downPayment || 0);
   const interestRate = Number(input.interestRate || 0);
   const months = Number(input.months);
   const bank = String(input.bank || "");
@@ -200,6 +201,9 @@ function saveInstallment_(input) {
   const schedule = Array.isArray(input.schedule) ? input.schedule : [];
   if (!/^[A-Za-z0-9_-]{8,80}$/.test(id) || !name || !Number.isFinite(price) || price <= 0 || price > 100000000) {
     throw new Error("Installment data is invalid");
+  }
+  if (!Number.isFinite(downPayment) || downPayment < 0 || downPayment >= price) {
+    throw new Error("Installment down payment is invalid");
   }
   if (!Number.isFinite(interestRate) || interestRate < 0 || interestRate > 100 || !Number.isInteger(months) || months < 1 || months > 60) {
     throw new Error("Installment interest or term is invalid");
@@ -225,11 +229,13 @@ function saveInstallment_(input) {
     putCell_(masterRow, masterColumns, "Installment ID", id);
     putCell_(masterRow, masterColumns, "รายการสินค้า", name);
     putCell_(masterRow, masterColumns, "ราคาสินค้า", price);
+    putCell_(masterRow, masterColumns, "เงินดาวน์", downPayment);
     putCell_(masterRow, masterColumns, "ดอกเบี้ยรวม (%)", interestRate);
     putCell_(masterRow, masterColumns, "จำนวนเดือน", months);
     putCell_(masterRow, masterColumns, "ธนาคาร", bank);
     putCell_(masterRow, masterColumns, "เดือนเริ่มชำระ", startMonth);
-    putCell_(masterRow, masterColumns, "ยอดรวม", Number(input.totalAmount || price * (1 + interestRate / 100)));
+    const financedAmount = price - downPayment;
+    putCell_(masterRow, masterColumns, "ยอดรวม", Number(input.totalAmount || (downPayment + financedAmount * (1 + interestRate / 100))));
     if (!existingRow) putCell_(masterRow, masterColumns, "วันที่บันทึก", new Date());
     master.getRange(rowNumber, 1, 1, masterRow.length).setValues([masterRow]);
 
@@ -301,17 +307,25 @@ function getInstallmentById_(id) {
 
 function installmentFromRow_(row, columns, schedule) {
   const price = Number(readCell_(row, columns, "ราคาสินค้า") || 0);
+  const downPayment = Number(readCell_(row, columns, "เงินดาวน์") || 0);
+  const financedAmount = Math.max(0, price - downPayment);
   const interestRate = Number(readCell_(row, columns, "ดอกเบี้ยรวม (%)") || 0);
   const months = Number(readCell_(row, columns, "จำนวนเดือน") || 0);
+  const installmentTotal = Math.round(financedAmount * (1 + interestRate / 100) * 100) / 100;
+  const totalAmount = downPayment + installmentTotal;
   return {
     id: String(readCell_(row, columns, "Installment ID") || ""),
     name: String(readCell_(row, columns, "รายการสินค้า") || ""),
     price: price,
+    downPayment: downPayment,
+    financedAmount: financedAmount,
     interestRate: interestRate,
+    interestAmount: Math.round((installmentTotal - financedAmount) * 100) / 100,
+    installmentTotal: installmentTotal,
     months: months,
     bank: String(readCell_(row, columns, "ธนาคาร") || ""),
     startMonth: monthToIso_(readCell_(row, columns, "เดือนเริ่มชำระ")),
-    totalAmount: Number(readCell_(row, columns, "ยอดรวม") || price * (1 + interestRate / 100)),
+    totalAmount: Number(readCell_(row, columns, "ยอดรวม") || totalAmount),
     createdAt: dateToIso_(readCell_(row, columns, "วันที่บันทึก")),
     schedule: schedule.sort(function (left, right) { return left.installmentNumber - right.installmentNumber; }),
   };
@@ -334,7 +348,12 @@ function ensureTableHeaders_(sheet, expectedHeaders, label) {
     sheet.setFrozenRows(1);
     return;
   }
-  validateTableHeaders_(sheet, expectedHeaders, label);
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getDisplayValues()[0];
+  const missing = expectedHeaders.filter(function (header) { return headers.indexOf(header) < 0; });
+  if (missing.length) {
+    sheet.getRange(1, headers.length + 1, 1, missing.length).setValues([missing]);
+    sheet.setFrozenRows(1);
+  }
 }
 
 function validateTableHeaders_(sheet, expectedHeaders, label) {
