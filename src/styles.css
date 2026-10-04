@@ -689,6 +689,98 @@ button:focus-visible, [role="button"]:focus-visible, input:focus-visible, select
 .delete-confirm-actions { width: 100%; display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
 .delete-confirm-actions button { min-height: 45px; }
 
+@media (prefers-reduced-motion: no-preference) {
+  :root {
+    --motion-soft: cubic-bezier(.2, .75, .25, 1);
+    --motion-spring: cubic-bezier(.2, .9, .25, 1.28);
+  }
+
+  button:not(:disabled) {
+    transition-property: transform, box-shadow, background-color, border-color, color, filter;
+    transition-duration: .18s;
+    transition-timing-function: var(--motion-soft);
+  }
+
+  button:not(:disabled):active { transform: scale(.965); filter: saturate(1.08); }
+
+  @media (hover: hover) and (pointer: fine) {
+    .primary-button:hover:not(:disabled), .top-upload:hover:not(:disabled), .subscription-add-button:hover:not(:disabled) {
+      transform: translateY(-2px);
+      box-shadow: 0 11px 22px rgba(57, 135, 246, .22);
+    }
+    .secondary-button:hover:not(:disabled), .icon-button:hover:not(:disabled), .danger-button:hover:not(:disabled) { transform: translateY(-1px); }
+    .nav-item:hover:not(:disabled), .mobile-nav button:hover:not(:disabled) { transform: translateX(2px); }
+    .table-body:hover:not(:disabled), .pending-row:hover:not(:disabled), .subscription-row-main:hover:not(:disabled) { transform: translateX(2px); }
+  }
+
+  .active-view { animation: view-enter .28s var(--motion-soft) both; }
+  .modal-backdrop { animation: backdrop-reveal .22s ease-out both; }
+  .review-modal, .connection-dialog, .installment-form-modal, .subscription-form-modal, .subscription-detail-modal, .delete-confirm-dialog {
+    animation: modal-spring-in .34s var(--motion-spring) both;
+    transform-origin: center bottom;
+  }
+  .toast { animation: success-toast-in .42s var(--motion-spring) both; }
+  .toast .icon { transform-origin: center; animation: success-check-pop .46s .06s var(--motion-spring) both; }
+
+  .nav-item.active > .icon, .mobile-nav button.active .icon { animation: selected-icon-pop .28s var(--motion-spring) both; }
+  .installment-bank-choice.selected { animation: choice-highlight .28s var(--motion-spring) both; }
+  .installment-bank-choice .bank-choice-check { transition: transform .2s var(--motion-spring), color .16s ease, background-color .16s ease; }
+  .installment-bank-choice.selected .bank-choice-check { animation: selected-check-pop .26s var(--motion-spring) both; }
+  .payment-toggle.is-paid .payment-check { animation: selected-check-pop .3s var(--motion-spring) both; }
+  button[aria-expanded="true"] .installment-expand, button[aria-pressed="true"] .payment-check { transition: transform .22s var(--motion-spring), background-color .18s ease; }
+
+  .review-form input, .review-form select, .review-form textarea,
+  .subscription-form-body input, .subscription-form-body select, .subscription-form-body textarea,
+  .search-field, .select-field, .month-control {
+    transition: border-color .2s ease, box-shadow .2s ease, background-color .2s ease;
+  }
+  .search-field:focus-within, .select-field:focus-within, .month-control:focus-within {
+    border-color: #9bc1f8;
+    box-shadow: 0 0 0 3px rgba(57, 135, 246, .12);
+  }
+  .installment-progress-track span { transition: width .55s var(--motion-soft); }
+}
+
+@keyframes backdrop-reveal {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes modal-spring-in {
+  from { opacity: 0; transform: translateY(14px) scale(.975); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes success-toast-in {
+  0% { opacity: 0; transform: translateY(14px) scale(.96); }
+  72% { opacity: 1; transform: translateY(-2px) scale(1.01); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes success-check-pop {
+  0% { opacity: 0; transform: scale(.45) rotate(-24deg); }
+  68% { opacity: 1; transform: scale(1.2) rotate(5deg); }
+  100% { opacity: 1; transform: scale(1) rotate(0); }
+}
+
+@keyframes selected-icon-pop {
+  0% { transform: scale(.82); }
+  65% { transform: scale(1.16); }
+  100% { transform: scale(1); }
+}
+
+@keyframes selected-check-pop {
+  0% { opacity: .5; transform: scale(.55); }
+  72% { opacity: 1; transform: scale(1.2); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+@keyframes choice-highlight {
+  0% { transform: scale(.97); }
+  72% { transform: scale(1.025); }
+  100% { transform: scale(1); }
+}
+
 @media (max-width: 900px) {
   .subscription-summary { grid-template-columns: minmax(0, 1.3fr) repeat(2, minmax(135px, .8fr)); gap: 9px; }
   .subscription-summary > article { min-height: 103px; padding: 13px; }
