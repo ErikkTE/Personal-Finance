@@ -11,6 +11,7 @@ import {
   getMonthOptions,
   getMonthLabel,
   getSummary,
+  getTodayDate,
   initialTransactions,
 } from "./data";
 import {
@@ -28,10 +29,17 @@ import {
   getGoogleStatus,
   listTransactions,
   removeTransaction as removeGoogleTransaction,
+  restoreTransaction as restoreGoogleTransaction,
   restoreHiddenTransactions as restoreGoogleHiddenTransactions,
   getEvidencePreview,
   listInstallments as listGoogleInstallments,
+  listSubscriptions as listGoogleSubscriptions,
+  removeInstallment as removeGoogleInstallment,
+  restoreInstallment as restoreGoogleInstallment,
+  removeSubscription as removeGoogleSubscription,
+  restoreSubscription as restoreGoogleSubscription,
   saveInstallment as saveGoogleInstallment,
+  saveSubscription as saveGoogleSubscription,
   setInstallmentPayment as setGoogleInstallmentPayment,
   saveTransaction as saveGoogleTransaction,
   signIn,
@@ -44,8 +52,55 @@ const navItems = [
   { key: "upload", label: "อัปโหลดสลิป", icon: "upload" },
   { key: "history", label: "ประวัติรายการ", icon: "list" },
   { key: "installments", label: "ผ่อนสินค้า", icon: "card" },
+  { key: "subscriptions", label: "สมัครบริการ", icon: "calendar" },
   { key: "coach", label: "คำแนะนำ AI", icon: "sparkles" },
 ];
+
+const subscriptionCategories = ["บันเทิง", "ทำงาน", "พื้นที่เก็บข้อมูล", "สุขภาพ", "การศึกษา", "อื่นๆ"];
+const subscriptionPaymentMethods = ["KBank", "SCB", "UOB", "บัตรเครดิตอื่นๆ", "Apple Pay", "Google Play", "อื่นๆ"];
+
+function loadSavedSubscriptions() {
+  try {
+    const saved = window.localStorage.getItem("personal-finance-subscriptions");
+    return saved ? JSON.parse(saved) : [];
+  } catch {
+    return [];
+  }
+}
+
+function defaultSubscriptionBillingDate() {
+  const [year, month, day] = getTodayDate().split("-").map(Number);
+  const firstOfNextMonth = new Date(Date.UTC(year, month, 1));
+  const targetYear = firstOfNextMonth.getUTCFullYear();
+  const targetMonth = firstOfNextMonth.getUTCMonth() + 1;
+  const targetDay = Math.min(day, new Date(Date.UTC(targetYear, targetMonth, 0)).getUTCDate());
+  return `${targetYear}-${String(targetMonth).padStart(2, "0")}-${String(targetDay).padStart(2, "0")}`;
+}
+
+function subscriptionBillingDate(subscription, selectedMonth) {
+  const [startYear, startMonth, day] = String(subscription.nextBillingDate || "").split("-").map(Number);
+  const [year, month] = String(selectedMonth || "").split("-").map(Number);
+  if (![startYear, startMonth, day, year, month].every(Number.isInteger)) return "";
+  const startOrdinal = startYear * 12 + startMonth - 1;
+  const selectedOrdinal = year * 12 + month - 1;
+  const monthGap = selectedOrdinal - startOrdinal;
+  const cycleLength = subscription.cycle === "yearly" ? 12 : 1;
+  if (monthGap < 0 || monthGap % cycleLength !== 0) return "";
+  const billingDay = Math.min(day, new Date(year, month, 0).getDate());
+  return `${year}-${String(month).padStart(2, "0")}-${String(billingDay).padStart(2, "0")}`;
+}
+
+function nextSubscriptionBillingDate(subscription, selectedMonth) {
+  const [year, month] = String(selectedMonth || "").split("-").map(Number);
+  if (!Number.isInteger(year) || !Number.isInteger(month)) return subscription.nextBillingDate || "";
+  for (let offset = 0; offset <= 24; offset += 1) {
+    const date = new Date(Date.UTC(year, month - 1 + offset, 1));
+    const value = `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
+    const due = subscriptionBillingDate(subscription, value);
+    if (due) return due;
+  }
+  return subscription.nextBillingDate || "";
+}
 
 function loadSavedInstallments() {
   try {
@@ -82,19 +137,32 @@ function App() {
   const [selectedMonth, setSelectedMonth] = useState(getCurrentMonthValue);
   const [transactions, setTransactions] = useState([]);
   const [installments, setInstallments] = useState([]);
+  const [subscriptions, setSubscriptions] = useState([]);
   const [installmentMonth, setInstallmentMonth] = useState(currentInstallmentMonth);
   const [installmentSync, setInstallmentSync] = useState({ ready: false, error: "กำลังตรวจการเชื่อมต่อ" });
+  const [subscriptionSync, setSubscriptionSync] = useState({ ready: false, error: "กำลังตรวจการเชื่อมต่อ" });
   const [savingInstallment, setSavingInstallment] = useState(false);
   const [updatingPayment, setUpdatingPayment] = useState("");
+  const [paidCelebrationKey, setPaidCelebrationKey] = useState("");
   const [hiddenTransactions, setHiddenTransactions] = useState([]);
   const [draft, setDraft] = useState(null);
-  const [toast, setToast] = useState("");
+  const [toast, setToastValue] = useState("");
+  const [toastAction, setToastAction] = useState(null);
+  const [toastActionBusy, setToastActionBusy] = useState(false);
   const [saving, setSaving] = useState(false);
   const [runtime, setRuntime] = useState({ status: "checking", mode: null });
   const [connection, setConnection] = useState({ mode: "local", state: "demo" });
   const [showSettings, setShowSettings] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [selectedSubscription, setSelectedSubscription] = useState(null);
   const [loginError, setLoginError] = useState("");
   const fileInputRef = useRef(null);
+
+  function setToast(message) {
+    setToastAction(null);
+    setToastValue(message);
+  }
 
   useLayoutEffect(() => {
     window.scrollTo(0, 0);
@@ -144,7 +212,9 @@ function App() {
     function enterDemoMode() {
       setTransactions(loadSavedTransactions());
       setInstallments(loadSavedInstallments());
+      setSubscriptions(loadSavedSubscriptions());
       setInstallmentSync({ ready: false, error: "โหมดทดลองบันทึกข้อมูลเฉพาะอุปกรณ์นี้" });
+      setSubscriptionSync({ ready: false, error: "โหมดทดลองบันทึกข้อมูลเฉพาะอุปกรณ์นี้" });
       setHiddenTransactions([]);
       setConnection({ mode: "local", state: "demo" });
       setRuntime({ status: "ready", mode: "local" });
@@ -175,10 +245,25 @@ function App() {
   }, [installments, runtime.status, runtime.mode]);
 
   useEffect(() => {
+    if (runtime.status === "ready" && runtime.mode === "local") {
+      try {
+        window.localStorage.setItem("personal-finance-subscriptions", JSON.stringify(subscriptions));
+      } catch {
+        setToast("พื้นที่เก็บข้อมูลรายการสมัครบริการในอุปกรณ์นี้เต็ม");
+      }
+    }
+  }, [subscriptions, runtime.status, runtime.mode]);
+
+  useEffect(() => {
     if (!toast) return undefined;
-    const timeout = window.setTimeout(() => setToast(""), 3600);
+    if (toastActionBusy) return undefined;
+    const hasAction = toastAction?.message === toast;
+    const timeout = window.setTimeout(() => {
+      setToastValue("");
+      setToastAction(null);
+    }, hasAction ? 6000 : 3600);
     return () => window.clearTimeout(timeout);
-  }, [toast]);
+  }, [toast, toastAction, toastActionBusy]);
 
   const summary = useMemo(() => getSummary(transactions, selectedMonth), [transactions, selectedMonth]);
   const monthChoices = useMemo(
@@ -205,13 +290,23 @@ function App() {
     const [health, remoteTransactions] = await Promise.all([getGoogleStatus(), listTransactions()]);
     setTransactions(remoteTransactions.filter((item) => item.status !== "ลบแล้ว"));
     setHiddenTransactions(remoteTransactions.filter((item) => item.status === "ลบแล้ว"));
-    try {
-      const remoteInstallments = await listGoogleInstallments();
-      setInstallments(remoteInstallments.map(prepareInstallmentPlan));
+    const [installmentResult, subscriptionResult] = await Promise.allSettled([
+      listGoogleInstallments(),
+      listGoogleSubscriptions(),
+    ]);
+    if (installmentResult.status === "fulfilled") {
+      setInstallments(installmentResult.value.map(prepareInstallmentPlan));
       setInstallmentSync({ ready: true, error: "" });
-    } catch (error) {
+    } else {
       setInstallments([]);
-      setInstallmentSync({ ready: false, error: error.message || "Apps Script ยังไม่รองรับข้อมูลผ่อนชำระ" });
+      setInstallmentSync({ ready: false, error: installmentResult.reason?.message || "Apps Script ยังไม่รองรับข้อมูลผ่อนชำระ" });
+    }
+    if (subscriptionResult.status === "fulfilled") {
+      setSubscriptions(subscriptionResult.value);
+      setSubscriptionSync({ ready: true, error: "" });
+    } else {
+      setSubscriptions([]);
+      setSubscriptionSync({ ready: false, error: subscriptionResult.reason?.message || "Apps Script ยังไม่รองรับรายการสมัครบริการ" });
     }
     setConnection({ mode: "google", state: "connected", ...health });
     setRuntime({ status: "ready", mode: "google" });
@@ -239,7 +334,9 @@ function App() {
     setTransactions([]);
     setHiddenTransactions([]);
     setInstallments([]);
+    setSubscriptions([]);
     setInstallmentSync({ ready: false, error: "กรุณาเข้าสู่ระบบเพื่อโหลดข้อมูลผ่อนชำระ" });
+    setSubscriptionSync({ ready: false, error: "กรุณาเข้าสู่ระบบเพื่อโหลดข้อมูลสมัครบริการ" });
     setShowSettings(false);
     setConnection({ mode: "google", state: "locked" });
     setRuntime({ status: "login", mode: "google" });
@@ -266,6 +363,17 @@ function App() {
     }
   }
 
+  async function retrySubscriptionSync() {
+    if (runtime.mode !== "google") return;
+    setSubscriptionSync({ ready: false, error: "กำลังโหลดจาก Google Sheets" });
+    try {
+      setSubscriptions(await listGoogleSubscriptions());
+      setSubscriptionSync({ ready: true, error: "" });
+    } catch (error) {
+      setSubscriptionSync({ ready: false, error: error.message || "Apps Script ยังไม่รองรับรายการสมัครบริการ" });
+    }
+  }
+
   async function createInstallment(input) {
     if (runtime.mode === "google" && !installmentSync.ready) {
       setToast("ยังบันทึกข้ามอุปกรณ์ไม่ได้ กรุณาอัปเดต Apps Script ให้รองรับข้อมูลผ่อนก่อน");
@@ -287,6 +395,30 @@ function App() {
     }
   }
 
+  async function createSubscription(input) {
+    if (runtime.mode === "google" && !subscriptionSync.ready) {
+      setToast("ยังบันทึกข้ามอุปกรณ์ไม่ได้ กรุณาอัปเดต Apps Script ให้รองรับรายการสมัครบริการก่อน");
+      return false;
+    }
+    const subscription = {
+      ...input,
+      id: input.id || globalThis.crypto?.randomUUID?.() || `SUB-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      createdAt: new Date().toISOString(),
+    };
+    setSavingInstallment(true);
+    try {
+      const saved = runtime.mode === "google" ? await saveGoogleSubscription(subscription) : subscription;
+      setSubscriptions((current) => [saved, ...current.filter((item) => item.id !== saved.id)]);
+      setToast(runtime.mode === "google" ? "บันทึกรายการสมัครบริการลง Google Sheets แล้ว" : "บันทึกรายการสมัครบริการไว้ในอุปกรณ์นี้แล้ว");
+      return true;
+    } catch (error) {
+      setToast(error.message || "บันทึกรายการสมัครบริการไม่สำเร็จ");
+      return false;
+    } finally {
+      setSavingInstallment(false);
+    }
+  }
+
   async function toggleInstallmentPayment(planId, installmentNumber, paid) {
     const key = `${planId}:${installmentNumber}`;
     if (updatingPayment) return;
@@ -295,6 +427,13 @@ function App() {
       return;
     }
     const originalPlans = installments;
+    const celebrationKey = `${planId}:${installmentNumber}`;
+    if (paid) {
+      setPaidCelebrationKey(celebrationKey);
+      window.setTimeout(() => setPaidCelebrationKey((current) => current === celebrationKey ? "" : current), 900);
+    } else {
+      setPaidCelebrationKey("");
+    }
     setUpdatingPayment(key);
     setInstallments((current) => current.map((plan) => plan.id !== planId ? plan : {
       ...plan,
@@ -509,9 +648,81 @@ function App() {
           ...current.filter((item) => item.id !== id),
         ]);
       }
-      setToast(runtime.mode === "google" ? "ซ่อนรายการจากแอปแล้ว โดยเก็บแถวไว้ในชีต" : "ลบรายการทดลองออกจากเครื่องแล้ว");
+      return true;
     } catch (error) {
       setToast(error.message || "ลบรายการไม่สำเร็จ");
+      return false;
+    }
+  }
+
+  async function confirmDeleteTarget() {
+    if (!deleteTarget || deleteBusy) return;
+    setDeleteBusy(true);
+    let succeeded = false;
+    const target = deleteTarget;
+    const deletedItem = target.type === "transaction"
+      ? transactions.find((item) => item.id === target.id) || hiddenTransactions.find((item) => item.id === target.id)
+      : target.type === "installment"
+        ? installments.find((item) => item.id === target.id)
+        : subscriptions.find((item) => item.id === target.id);
+    try {
+      if (target.type === "transaction") {
+        succeeded = await removeTransaction(target.id);
+        if (succeeded && draft?.transactionId === target.id) setDraft(null);
+      } else if (target.type === "installment") {
+        if (runtime.mode === "google") await removeGoogleInstallment(target.id);
+        setInstallments((current) => current.filter((item) => item.id !== target.id));
+        succeeded = true;
+      } else if (target.type === "subscription") {
+        if (runtime.mode === "google") await removeGoogleSubscription(target.id);
+        setSubscriptions((current) => current.filter((item) => item.id !== target.id));
+        setSelectedSubscription(null);
+        succeeded = true;
+      }
+      if (succeeded) {
+        const message = target.type === "transaction"
+          ? runtime.mode === "google" ? "ซ่อนรายการจากแอปแล้ว · เก็บข้อมูลไว้ในชีต" : "ลบรายการทดลองออกจากเครื่องแล้ว"
+          : target.type === "installment"
+            ? runtime.mode === "google" ? "ซ่อนแผนผ่อนแล้ว" : "ลบแผนผ่อนออกจากอุปกรณ์นี้แล้ว"
+            : runtime.mode === "google" ? "ซ่อนบริการแล้ว" : "ลบบริการออกจากอุปกรณ์นี้แล้ว";
+        setToastValue(message);
+        setToastAction(deletedItem ? { type: target.type, item: deletedItem, message } : null);
+      }
+    } catch (error) {
+      setToast(error.message || "ลบรายการไม่สำเร็จ");
+    } finally {
+      setDeleteBusy(false);
+      if (succeeded) setDeleteTarget(null);
+    }
+  }
+
+  async function undoLastDelete() {
+    const action = toastAction;
+    if (!action || toastActionBusy) return;
+    setToastActionBusy(true);
+    try {
+      if (runtime.mode === "google") {
+        if (action.type === "transaction") await restoreGoogleTransaction(action.item.id);
+        else if (action.type === "installment") await restoreGoogleInstallment(action.item.id);
+        else if (action.type === "subscription") await restoreGoogleSubscription(action.item.id);
+      }
+
+      if (action.type === "transaction") {
+        setTransactions((current) => current.some((item) => item.id === action.item.id) ? current : [action.item, ...current]);
+        setHiddenTransactions((current) => current.filter((item) => item.id !== action.item.id));
+        if (action.item.budgetMonth) setSelectedMonth(action.item.budgetMonth);
+      } else if (action.type === "installment") {
+        setInstallments((current) => current.some((item) => item.id === action.item.id) ? current : [action.item, ...current]);
+      } else if (action.type === "subscription") {
+        setSubscriptions((current) => current.some((item) => item.id === action.item.id) ? current : [action.item, ...current]);
+      }
+
+      setToastAction(null);
+      setToast("คืนรายการกลับมาแล้ว");
+    } catch (error) {
+      setToast(error.message || "คืนรายการไม่สำเร็จ ลองอีกครั้งได้ครับ");
+    } finally {
+      setToastActionBusy(false);
     }
   }
 
@@ -579,7 +790,6 @@ function App() {
               selectedMonth={selectedMonth}
               onSelectTransaction={openTransaction}
               connection={connection}
-              onRemove={removeTransaction}
               hiddenTransactions={hiddenTransactions.filter((item) => item.budgetMonth === selectedMonth)}
               onRestoreMonth={restoreHiddenForMonth}
             />
@@ -595,8 +805,25 @@ function App() {
               onRetrySync={retryInstallmentSync}
               saving={savingInstallment}
               updatingPayment={updatingPayment}
+              paidCelebrationKey={paidCelebrationKey}
               onCreate={createInstallment}
               onTogglePayment={toggleInstallmentPayment}
+              onDelete={(plan) => setDeleteTarget({ type: "installment", id: plan.id, name: plan.name })}
+              onSettings={() => setShowSettings(true)}
+            />
+          )}
+          {activeView === "subscriptions" && (
+            <SubscriptionsView
+              subscriptions={subscriptions}
+              selectedMonth={selectedMonth}
+              storageMode={runtime.mode}
+              syncReady={subscriptionSync.ready}
+              syncError={subscriptionSync.error}
+              onRetrySync={retrySubscriptionSync}
+              saving={savingInstallment}
+              onCreate={createSubscription}
+              onSelect={setSelectedSubscription}
+              onDelete={(subscription) => setDeleteTarget({ type: "subscription", id: subscription.id, name: subscription.name })}
               onSettings={() => setShowSettings(true)}
             />
           )}
@@ -616,10 +843,12 @@ function App() {
         }}
       />
       {draft && (
-        <ReviewModal draft={draft} monthChoices={monthChoices} transactionNameOptions={transactionNameOptions} saving={saving} storageMode={runtime.mode} onChange={updateDraft} onAttachEvidence={attachPendingEvidence} onClose={closeDraft} onConfirm={confirmDraft} />
+        <ReviewModal draft={draft} monthChoices={monthChoices} transactionNameOptions={transactionNameOptions} saving={saving} storageMode={runtime.mode} onChange={updateDraft} onAttachEvidence={attachPendingEvidence} onClose={closeDraft} onConfirm={confirmDraft} onRequestDelete={() => setDeleteTarget({ type: "transaction", id: draft.transactionId, name: draft.name })} />
       )}
+      {selectedSubscription && <SubscriptionDetailModal subscription={selectedSubscription} selectedMonth={selectedMonth} onClose={() => setSelectedSubscription(null)} onDelete={() => setDeleteTarget({ type: "subscription", id: selectedSubscription.id, name: selectedSubscription.name })} />}
+      {deleteTarget && <DeleteConfirmDialog target={deleteTarget} storageMode={runtime.mode} busy={deleteBusy} onCancel={() => !deleteBusy && setDeleteTarget(null)} onConfirm={confirmDeleteTarget} />}
       {showSettings && <ConnectionDialog connection={connection} onClose={() => setShowSettings(false)} onLogout={handleLogout} onRetry={retryGoogleConnection} />}
-      {toast && <div className="toast"><Icon name="check" size={17} />{toast}</div>}
+      {toast && <div className="toast" role="status" aria-live="polite"><Icon name="check" size={17} /><span className="toast-message">{toast}</span>{toastAction?.message === toast && <button className="toast-undo-button" type="button" onClick={undoLastDelete} disabled={toastActionBusy}>{toastActionBusy ? "กำลังคืน…" : "เลิกทำ"}</button>}</div>}
     </div>
   );
 }
@@ -708,7 +937,7 @@ function MobileNav({ activeView, onNavigate }) {
       {navItems.map((item) => (
         <button key={item.key} className={activeView === item.key ? "active" : ""} onClick={() => onNavigate(item.key)} aria-label={item.label} aria-current={activeView === item.key ? "page" : undefined}>
           <Icon name={item.icon} size={20} />
-          <span>{({ overview: "ภาพรวม", upload: "อัปโหลด", history: "ประวัติ", installments: "ผ่อนสินค้า", coach: "AI" })[item.key]}</span>
+          <span>{({ overview: "ภาพรวม", upload: "อัปโหลด", history: "ประวัติ", installments: "ผ่อนสินค้า", subscriptions: "บริการ", coach: "AI" })[item.key]}</span>
         </button>
       ))}
     </nav>
@@ -857,7 +1086,7 @@ function ProcessStep({ number, title, detail, active }) {
   return <div className={`process-step ${active ? "active" : ""}`}><span className="step-number">{number}</span><span><strong>{title}</strong><small>{detail}</small></span>{active && <span className="step-current">ตอนนี้</span>}</div>;
 }
 
-function HistoryView({ transactions, selectedMonth, connection, onSelectTransaction, onRemove, hiddenTransactions, onRestoreMonth }) {
+function HistoryView({ transactions, selectedMonth, connection, onSelectTransaction, hiddenTransactions, onRestoreMonth }) {
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("ทั้งหมด");
   const [restoring, setRestoring] = useState(false);
@@ -900,12 +1129,12 @@ function HistoryView({ transactions, selectedMonth, connection, onSelectTransact
         </div>
         <TransactionTable transactions={filtered} onSelect={onSelectTransaction} />
       </section>
-      <div className="history-footnote"><Icon name="info" size={16} /><span>{connection.mode === "google" ? "ข้อมูลนี้โหลดจาก Google Sheets รายการที่ซ่อนจากแอปยังคงอยู่ในชีต" : "ข้อมูลทดลองบันทึกไว้ในอุปกรณ์นี้เท่านั้น ยังไม่ได้ส่งไป Google Sheets/Drive"}</span>{filtered.length > 0 && <button className="danger-link" onClick={() => window.confirm(connection.mode === "google" ? "ซ่อนรายการล่าสุดจากแอปหรือไม่? แถวข้อมูลจะยังคงอยู่ใน Google Sheets" : "ลบรายการทดลองล่าสุดออกจากอุปกรณ์นี้หรือไม่?") && onRemove(filtered[0].id)}>{connection.mode === "google" ? "ซ่อนรายการล่าสุด" : "ลบรายการล่าสุด"}</button>}</div>
+      <div className="history-footnote"><Icon name="info" size={16} /><span>{connection.mode === "google" ? "แตะรายการเพื่อดูรายละเอียดและนำออกจากแอปได้ · ข้อมูลที่นำออกยังเก็บในชีต" : "แตะรายการเพื่อดูรายละเอียดและลบออกจากอุปกรณ์นี้ได้"}</span></div>
     </div>
   );
 }
 
-function InstallmentsView({ plans, month, onMonthChange, storageMode, syncReady, syncError, onRetrySync, saving, updatingPayment, onCreate, onTogglePayment, onSettings }) {
+function InstallmentsView({ plans, month, onMonthChange, storageMode, syncReady, syncError, onRetrySync, saving, updatingPayment, paidCelebrationKey, onCreate, onTogglePayment, onDelete, onSettings }) {
   const [formOpen, setFormOpen] = useState(false);
   const summary = summarizeInstallments(plans, month);
   const duePlans = [...new Map(summary.dueThisMonth.map(({ plan }) => [plan.id, plan])).values()];
@@ -968,7 +1197,10 @@ function InstallmentsView({ plans, month, onMonthChange, storageMode, syncReady,
               plan={plan}
               index={index}
               updatingPayment={updatingPayment}
+              paidCelebrationKey={paidCelebrationKey}
               onTogglePayment={onTogglePayment}
+              canDelete={canSave}
+              onDelete={() => onDelete(plan)}
             />
           ))}
         </section>
@@ -989,7 +1221,7 @@ function InstallmentsView({ plans, month, onMonthChange, storageMode, syncReady,
   );
 }
 
-function InstallmentPlanCard({ plan, index, updatingPayment, onTogglePayment }) {
+function InstallmentPlanCard({ plan, index, updatingPayment, paidCelebrationKey, onTogglePayment, canDelete, onDelete }) {
   const [expanded, setExpanded] = useState(false);
   const [scheduleExpanded, setScheduleExpanded] = useState(false);
   const bank = installmentBanks.find((item) => item.value === plan.bank) || { label: plan.bank || "ไม่ระบุ", short: "?", tone: "loan" };
@@ -1043,12 +1275,12 @@ function InstallmentPlanCard({ plan, index, updatingPayment, onTogglePayment }) 
                   const key = `${plan.id}:${payment.installmentNumber}`;
                   const isUpdating = updatingPayment === key;
                   return (
-                    <div className={`installment-schedule-row ${payment.paid ? "paid" : ""}`} role="row" key={payment.installmentNumber}>
+                    <div className={`installment-schedule-row ${payment.paid ? "paid" : ""} ${paidCelebrationKey === key ? "paid-confirming" : ""}`} role="row" key={payment.installmentNumber}>
                       <span data-label="งวด" role="cell">งวดที่ {payment.installmentNumber}</span>
                       <span data-label="เดือน" role="cell">{installmentMonthLabel(payment.month)}</span>
                       <strong data-label="จำนวนเงิน" role="cell">฿ {formatNumber(payment.amount)}</strong>
                       <span data-label="สถานะ" role="cell">
-                        <button className={`payment-toggle ${payment.paid ? "is-paid" : ""}`} type="button" disabled={Boolean(updatingPayment)} aria-pressed={payment.paid} onClick={() => onTogglePayment(plan.id, payment.installmentNumber, !payment.paid)}>
+                        <button className={`payment-toggle ${payment.paid ? "is-paid" : ""} ${paidCelebrationKey === key ? "paid-confirming" : ""}`} type="button" disabled={Boolean(updatingPayment)} aria-pressed={payment.paid} onClick={() => onTogglePayment(plan.id, payment.installmentNumber, !payment.paid)}>
                           <span className="payment-check"><Icon name={payment.paid ? "check" : "clock"} size={13} /></span>
                           {isUpdating ? "กำลังบันทึก…" : payment.paid ? "ชำระแล้ว" : "ทำเครื่องหมายว่าจ่ายแล้ว"}
                         </button>
@@ -1059,9 +1291,113 @@ function InstallmentPlanCard({ plan, index, updatingPayment, onTogglePayment }) 
               </div>
             </div>
           )}
+          <div className="installment-delete-row"><span>นำแผนนี้ออกจากรายการผ่อน</span><button className="danger-button" type="button" onClick={onDelete} disabled={!canDelete} title={!canDelete ? "รอการเชื่อมต่อ Apps Script เพื่อบันทึกการลบ" : undefined}><Icon name="trash" size={15} />ลบแผนผ่อน</button></div>
         </div>
       )}
     </article>
+  );
+}
+
+function SubscriptionsView({ subscriptions, selectedMonth, storageMode, syncReady, syncError, onRetrySync, saving, onCreate, onSelect, onDelete, onSettings }) {
+  const [formOpen, setFormOpen] = useState(false);
+  const canSave = storageMode !== "google" || syncReady;
+  const monthlyDue = useMemo(() => subscriptions.map((subscription) => ({
+    ...subscription,
+    dueDate: subscriptionBillingDate(subscription, selectedMonth),
+  })).filter((subscription) => subscription.dueDate), [subscriptions, selectedMonth]);
+  const totalDue = monthlyDue.reduce((sum, subscription) => sum + Number(subscription.amount || 0), 0);
+  const monthlyEquivalent = subscriptions.reduce((sum, subscription) => sum + Number(subscription.amount || 0) / (subscription.cycle === "yearly" ? 12 : 1), 0);
+  const orderedSubscriptions = useMemo(() => subscriptions.map((subscription) => {
+    const dueDate = subscriptionBillingDate(subscription, selectedMonth);
+    const nextDate = nextSubscriptionBillingDate(subscription, selectedMonth);
+    return { ...subscription, dueDate, nextDate };
+  }).sort((left, right) => {
+    if (left.dueDate && !right.dueDate) return -1;
+    if (!left.dueDate && right.dueDate) return 1;
+    return String(left.nextDate || "9999").localeCompare(String(right.nextDate || "9999")) || left.name.localeCompare(right.name, "th");
+  }), [subscriptions, selectedMonth]);
+
+  return (
+    <div className="page-stack subscriptions-page">
+      <section className="page-intro">
+        <div><h2>ค่าสมัครบริการ</h2><p>ดูแอปที่เรียกเก็บในเดือน {getMonthLabel(selectedMonth)} พร้อมรอบต่ออายุและช่องทางชำระ</p></div>
+        <button className="primary-button subscription-add-button" type="button" onClick={() => setFormOpen(true)} disabled={!canSave} title={!canSave ? "อัปเดต Apps Script ก่อนบันทึกรายการข้ามอุปกรณ์" : undefined}><Icon name="plus" size={18} />เพิ่มบริการ</button>
+      </section>
+
+      {storageMode === "google" && !syncReady && <section className="installment-sync-notice" role="status"><span className="installment-sync-icon"><Icon name="info" size={18} /></span><div><strong>ยังซิงก์รายการสมัครบริการไม่ได้</strong><span>{syncError || "อัปเดต Apps Script เพื่อเปิดใช้รายการนี้"}</span></div><button className="secondary-button" type="button" onClick={onRetrySync}>ลองเชื่อมต่ออีกครั้ง</button></section>}
+      {storageMode !== "google" && <section className="installment-sync-notice local" role="status"><span className="installment-sync-icon"><Icon name="info" size={18} /></span><div><strong>ข้อมูลทดลองในอุปกรณ์นี้</strong><span>รายการสมัครบริการจะบันทึกไว้ในเครื่องนี้ จนกว่าจะเชื่อมต่อ Google Sheets</span></div><button className="secondary-button" type="button" onClick={onSettings}>การเชื่อมต่อ</button></section>}
+
+      <section className="subscription-summary" aria-label="สรุปค่าสมัครบริการรายเดือน">
+        <article className="subscription-summary-main"><span className="subscription-summary-icon"><Icon name="calendar" size={19} /></span><div><small>ครบกำหนดเดือนนี้</small><strong>฿ {formatNumber(totalDue)}</strong><span>{monthlyDue.length} บริการ · {getMonthLabel(selectedMonth)}</span></div></article>
+        <article><small>บริการที่ติดตาม</small><strong>{subscriptions.length} <span>รายการ</span></strong><span>รวมรายเดือนและรายปี</span></article>
+        <article><small>เฉลี่ยต่อเดือน</small><strong>฿ {formatNumber(monthlyEquivalent)}</strong><span>เฉลี่ยค่าสมัครรายปี ÷ 12 เดือน</span></article>
+      </section>
+
+      <section className="panel subscription-list-panel">
+        <div className="panel-header subscription-list-header"><div><h3>รายการสมัครบริการ</h3><span>{orderedSubscriptions.length} รายการ · แตะเพื่อดูรายละเอียด</span></div><strong className="subscription-month-total">฿ {formatNumber(totalDue)} <small>เดือนนี้</small></strong></div>
+        {orderedSubscriptions.length ? <div className="subscription-list">{orderedSubscriptions.map((subscription) => <SubscriptionRow key={subscription.id} subscription={subscription} selectedMonth={selectedMonth} onSelect={() => onSelect(subscription)} onDelete={() => onDelete(subscription)} />)}</div> : <div className="subscription-empty"><span><Icon name="calendar" size={22} /></span><strong>ยังไม่มีบริการที่ติดตาม</strong><small>เพิ่มชื่อแอปหรือบริการ แล้วระบบจะแสดงเดือนที่เรียกเก็บให้อัตโนมัติ</small><button className="secondary-button" type="button" onClick={() => setFormOpen(true)} disabled={!canSave}><Icon name="plus" size={16} />เพิ่มบริการแรก</button></div>}
+      </section>
+
+      {formOpen && <SubscriptionFormModal saving={saving} onClose={() => setFormOpen(false)} onSave={async (form) => { const saved = await onCreate(form); if (saved) setFormOpen(false); }} />}
+    </div>
+  );
+}
+
+function SubscriptionRow({ subscription, selectedMonth, onSelect, onDelete }) {
+  const initials = subscription.name.trim().split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase();
+  return (
+    <div className={`subscription-row ${subscription.dueDate ? "is-due" : ""}`}>
+      <button className="subscription-row-main" type="button" onClick={onSelect} aria-label={`ดูรายละเอียด ${subscription.name}`}>
+        <span className="subscription-app-mark">{initials || "A"}</span>
+        <span className="subscription-row-copy"><strong>{subscription.name}</strong><small>{subscription.category || "อื่นๆ"} · {subscription.paymentMethod}</small><span className={`subscription-due-label ${subscription.dueDate ? "due-now" : ""}`}>{subscription.dueDate ? `เรียกเก็บ ${formatDate(subscription.dueDate)}` : `รอบถัดไป ${formatDate(subscription.nextDate)}`}</span></span>
+        <span className="subscription-row-amount"><strong>฿ {formatNumber(subscription.amount)}</strong><small>{subscription.cycle === "yearly" ? "รายปี" : "รายเดือน"}</small></span>
+        <span className="subscription-row-chevron"><Icon name="chevronRight" size={17} /></span>
+      </button>
+      <button className="icon-button subscription-delete-button" type="button" onClick={onDelete} aria-label={`ลบ ${subscription.name}`} title={`ลบ ${subscription.name}`}><Icon name="trash" size={17} /></button>
+    </div>
+  );
+}
+
+function SubscriptionFormModal({ saving, onClose, onSave }) {
+  const [form, setForm] = useState({ name: "", amount: "", cycle: "monthly", nextBillingDate: defaultSubscriptionBillingDate(), category: "บันเทิง", paymentMethod: "KBank", note: "" });
+  function change(field, value) { setForm((current) => ({ ...current, [field]: value })); }
+  async function submit(event) {
+    event.preventDefault();
+    await onSave({ ...form, amount: Number(form.amount), id: globalThis.crypto?.randomUUID?.() || `SUB-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` });
+  }
+  return (
+    <div className="modal-backdrop subscription-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !saving && onClose()}>
+      <section className="subscription-form-modal" role="dialog" aria-modal="true" aria-labelledby="subscription-form-title">
+        <header className="modal-header"><div><span className="modal-kicker">บริการที่เรียกเก็บเป็นประจำ</span><h2 id="subscription-form-title">เพิ่มรายการสมัครบริการ</h2></div><button className="icon-button" type="button" aria-label="ปิด" onClick={onClose} disabled={saving}><Icon name="close" size={19} /></button></header>
+        <form onSubmit={submit}>
+          <div className="review-form subscription-form-body">
+            <label>ชื่อแอปหรือบริการ<input autoFocus required maxLength={120} placeholder="เช่น iCloud+, Netflix, YouTube Premium" value={form.name} onChange={(event) => change("name", event.target.value)} /></label>
+            <div className="form-two-col"><label>ยอดเรียกเก็บ (บาท)<input type="number" min="0.01" max="100000000" step="0.01" required placeholder="เช่น 99" value={form.amount} onChange={(event) => change("amount", event.target.value)} /></label><label>รอบเรียกเก็บ<select value={form.cycle} onChange={(event) => change("cycle", event.target.value)}><option value="monthly">รายเดือน</option><option value="yearly">รายปี</option></select></label></div>
+            <div className="form-two-col"><label>วันเรียกเก็บครั้งถัดไป<input type="date" required value={form.nextBillingDate} onChange={(event) => change("nextBillingDate", event.target.value)} /></label><label>หมวดหมู่<select value={form.category} onChange={(event) => change("category", event.target.value)}>{subscriptionCategories.map((category) => <option key={category}>{category}</option>)}</select></label></div>
+            <label>ช่องทางชำระ<select value={form.paymentMethod} onChange={(event) => change("paymentMethod", event.target.value)}>{subscriptionPaymentMethods.map((method) => <option key={method}>{method}</option>)}</select></label>
+            <label>หมายเหตุ<textarea rows="2" maxLength={500} placeholder="เช่น แพ็กเกจครอบครัว หรือบัญชีที่ใช้" value={form.note} onChange={(event) => change("note", event.target.value)} /></label>
+          </div>
+          <footer className="modal-footer"><button className="secondary-button" type="button" onClick={onClose} disabled={saving}>ยกเลิก</button><button className="primary-button" type="submit" disabled={saving}>{saving ? "กำลังบันทึก…" : <><Icon name="check" size={17} />บันทึกรายการ</>}</button></footer>
+        </form>
+      </section>
+    </div>
+  );
+}
+
+function SubscriptionDetailModal({ subscription, selectedMonth, onClose, onDelete }) {
+  const dueDate = subscriptionBillingDate(subscription, selectedMonth);
+  const nextDate = nextSubscriptionBillingDate(subscription, selectedMonth);
+  return (
+    <div className="modal-backdrop subscription-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+      <section className="subscription-detail-modal" role="dialog" aria-modal="true" aria-labelledby="subscription-detail-title">
+        <header className="modal-header"><div><span className="modal-kicker">รายละเอียดบริการ</span><h2 id="subscription-detail-title">{subscription.name}</h2></div><button className="icon-button" type="button" aria-label="ปิด" onClick={onClose}><Icon name="close" size={19} /></button></header>
+        <div className="subscription-detail-content">
+          <div className="subscription-detail-amount"><span><Icon name="calendar" size={18} /></span><div><small>{dueDate ? `ครบกำหนด ${getMonthLabel(selectedMonth)}` : `ไม่มีรอบเรียกเก็บใน ${getMonthLabel(selectedMonth)}`}</small><strong>฿ {formatNumber(subscription.amount)}</strong></div><em>{subscription.cycle === "yearly" ? "รายปี" : "รายเดือน"}</em></div>
+          <dl className="subscription-detail-list"><div><dt>วันที่เรียกเก็บ</dt><dd>{dueDate ? formatDate(dueDate) : `ครั้งถัดไป ${formatDate(nextDate)}`}</dd></div><div><dt>หมวดหมู่</dt><dd>{subscription.category || "อื่นๆ"}</dd></div><div><dt>ช่องทางชำระ</dt><dd>{subscription.paymentMethod}</dd></div>{subscription.note && <div><dt>หมายเหตุ</dt><dd>{subscription.note}</dd></div>}</dl>
+        </div>
+        <footer className="modal-footer subscription-detail-footer"><button className="danger-button" type="button" onClick={onDelete}><Icon name="trash" size={16} />ลบบริการ</button><button className="secondary-button" type="button" onClick={onClose}>ปิด</button></footer>
+      </section>
+    </div>
   );
 }
 
@@ -1211,7 +1547,7 @@ function SavedEvidencePreview({ transactionId, evidenceUrl }) {
   return <img src={preview.url} alt="หลักฐานรายการจาก Google Drive" onError={() => setPreview((current) => ({ ...current, state: "failed", url: "" }))} />;
 }
 
-function ReviewModal({ draft, monthChoices, transactionNameOptions, saving, storageMode, onChange, onAttachEvidence, onClose, onConfirm }) {
+function ReviewModal({ draft, monthChoices, transactionNameOptions, saving, storageMode, onChange, onAttachEvidence, onClose, onConfirm, onRequestDelete }) {
   const isPending = Boolean(draft.isPending);
   const isExisting = Boolean(draft.isExisting) && !isPending;
   const isOcrProcessing = draft.ocrStatus === "reading";
@@ -1264,7 +1600,26 @@ function ReviewModal({ draft, monthChoices, transactionNameOptions, saving, stor
             {draft.ocrText && <details className="ocr-text-details"><summary>ดูข้อความที่ OCR อ่านได้</summary><pre>{draft.ocrText}</pre></details>}
           </div>
         </div>
-        <div className="modal-footer"><button className="secondary-button" onClick={onClose} disabled={saving}>{isExisting ? "ปิด" : "ยกเลิก"}</button>{!isExisting && <button className="primary-button" onClick={onConfirm} disabled={saving || isOcrProcessing}>{saving ? "กำลังบันทึก…" : isOcrProcessing ? "กำลังอ่านสลิป…" : <><Icon name="check" size={17} />{isPending ? "บันทึกต่อ" : "ยืนยันรายการ"}</>}</button>}</div>
+        <div className="modal-footer review-modal-footer">{draft.transactionId && <button className="danger-button" type="button" onClick={onRequestDelete} disabled={saving}><Icon name="trash" size={16} />ลบรายการ</button>}<button className="secondary-button" type="button" onClick={onClose} disabled={saving}>{isExisting ? "ปิด" : "ยกเลิก"}</button>{!isExisting && <button className="primary-button" type="button" onClick={onConfirm} disabled={saving || isOcrProcessing}>{saving ? "กำลังบันทึก…" : isOcrProcessing ? "กำลังอ่านสลิป…" : <><Icon name="check" size={17} />{isPending ? "บันทึกต่อ" : "ยืนยันรายการ"}</>}</button>}</div>
+      </section>
+    </div>
+  );
+}
+
+function DeleteConfirmDialog({ target, storageMode, busy, onCancel, onConfirm }) {
+  const titles = {
+    transaction: { type: "รายการธุรกรรม", detail: storageMode === "google" ? "รายการนี้จะถูกนำออกจากแอปและยอดสรุป ข้อมูลใน Google Sheets ยังคงอยู่ และกู้คืนได้จากหน้าประวัติ" : "รายการนี้จะถูกลบออกจากข้อมูลบนอุปกรณ์นี้" },
+    installment: { type: "แผนผ่อน", detail: storageMode === "google" ? "แผนนี้และกำหนดชำระจะถูกนำออกจากแอป ข้อมูลใน Google Sheets ยังคงอยู่เป็นประวัติ" : "แผนและกำหนดชำระนี้จะถูกลบออกจากอุปกรณ์นี้" },
+    subscription: { type: "รายการสมัครบริการ", detail: storageMode === "google" ? "บริการนี้จะถูกนำออกจากรายการและยอดสรุป ข้อมูลใน Google Sheets ยังคงอยู่เป็นประวัติ" : "บริการนี้จะถูกลบออกจากรายการบนอุปกรณ์นี้" },
+  }[target.type] || { type: "รายการ", detail: "รายการนี้จะถูกนำออกจากแอป" };
+  return (
+    <div className="modal-backdrop delete-confirm-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !busy && onCancel()}>
+      <section className="delete-confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="delete-confirm-title" aria-describedby="delete-confirm-detail">
+        <span className="delete-confirm-icon"><Icon name="trash" size={21} /></span>
+        <h2 id="delete-confirm-title">ยืนยันการลบ{titles.type}?</h2>
+        <strong className="delete-confirm-name">{target.name || "รายการนี้"}</strong>
+        <p id="delete-confirm-detail">{titles.detail}</p>
+        <div className="delete-confirm-actions"><button className="secondary-button" type="button" onClick={onCancel} disabled={busy}>ยกเลิก</button><button className="danger-confirm-button" type="button" onClick={onConfirm} disabled={busy}><Icon name="trash" size={16} />{busy ? "กำลังลบ…" : "ยืนยันลบ"}</button></div>
       </section>
     </div>
   );

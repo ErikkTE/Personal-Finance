@@ -251,12 +251,17 @@ button:focus-visible, [role="button"]:focus-visible, input:focus-visible, select
 .qr-review-note .icon { flex: 0 0 auto; margin-top: 1px; }
 .qr-review-note-warning { border-color: #f5d7a2; color: #805713; background: #fff8e9; }
 .ocr-progress { display: block; height: 4px; margin-top: 7px; overflow: hidden; border-radius: 4px; background: #d9e8fb; }
-.ocr-progress > span { display: block; height: 100%; border-radius: inherit; background: var(--blue); transition: width .2s ease; }
+.ocr-progress > span { position: relative; display: block; height: 100%; overflow: hidden; border-radius: inherit; background: var(--blue); transition: width .24s ease; }
+.ocr-progress > span::after { position: absolute; inset: 0 auto 0 -30%; width: 30%; background: linear-gradient(90deg, transparent, rgba(255,255,255,.8), transparent); content: ""; }
 .ocr-text-details { padding-top: 2px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; }
 .ocr-text-details summary { padding: 8px 0; color: var(--blue-deep); cursor: pointer; font-weight: 600; }
 .ocr-text-details pre { max-height: 160px; margin: 0 0 8px; overflow: auto; color: #475467; white-space: pre-wrap; overflow-wrap: anywhere; font-family: inherit; font-size: 11px; line-height: 1.6; }
 .modal-footer { display: flex; justify-content: flex-end; gap: 9px; padding: 15px 24px 21px; border-top: 1px solid var(--line); }
-.toast { position: fixed; right: 23px; bottom: 24px; z-index: 50; display: flex; align-items: center; gap: 8px; max-width: min(420px, calc(100vw - 40px)); padding: 12px 15px; border: 1px solid #b8e9ce; border-radius: 11px; color: #087443; background: #effcf5; box-shadow: 0 14px 32px rgba(16,24,40,.13); font-size: 12px; font-weight: 600; }
+.toast { position: fixed; right: 23px; bottom: 24px; z-index: 50; display: flex; align-items: center; gap: 9px; max-width: min(500px, calc(100vw - 40px)); padding: 10px 12px 10px 15px; border: 1px solid #b8e9ce; border-radius: 13px; color: #087443; background: #effcf5; box-shadow: 0 14px 32px rgba(16,24,40,.13); font-size: 12px; font-weight: 600; }
+.toast-message { flex: 1; }
+.toast-undo-button { flex: none; min-height: 34px; padding: 6px 11px; border: 1px solid #a5dfbd; border-radius: 9px; color: #087443; background: #fff; font-size: 11px; font-weight: 700; transition: transform .18s ease, background-color .18s ease, border-color .18s ease; }
+.toast-undo-button:hover:not(:disabled) { border-color: #54c38b; background: #e8fbf0; }
+.toast-undo-button:disabled { opacity: .7; }
 .mobile-nav { display: none; }
 
 .active-view { min-width: 0; }
@@ -341,7 +346,7 @@ button:focus-visible, [role="button"]:focus-visible, input:focus-visible, select
 .installment-schedule-row:hover:not(.installment-schedule-head) { background: #f8fbff; }
 .installment-schedule-head { min-height: 36px; color: #8998ac; background: #f8faff; font-size: 10px; font-weight: 700; }
 .installment-schedule-row strong { color: #293a56; font-size: 11px; }
-.installment-schedule-row.paid { background: #f2fbf6; }
+.installment-schedule-row.paid { background: #f2fbf6; transition: background .24s ease, box-shadow .24s ease; }
 .installment-schedule-row.paid strong { color: #13865b; }
 .payment-toggle { display: inline-flex; align-items: center; gap: 7px; min-height: 32px; padding: 5px 9px; border: 1px solid #e5ebf3; border-radius: 999px; color: #64748b; background: #fff; font-size: 10px; font-weight: 600; transition: transform .16s ease, border-color .18s ease, color .18s ease, background .18s ease; }
 .payment-toggle:hover:not(:disabled) { border-color: #a9e0c4; color: #087443; background: #f4fcf7; }
@@ -519,8 +524,8 @@ button:focus-visible, [role="button"]:focus-visible, input:focus-visible, select
   .row-icon { width: 28px; height: 28px; border-radius: 10px; }
   .ai-summary { padding: 15px; }
   .ai-message { margin-top: 15px; }
-  .mobile-nav { position: fixed; inset: auto 0 0; z-index: 15; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); min-height: 76px; padding: 8px 5px max(10px, env(safe-area-inset-bottom)); border-top: 1px solid rgba(218, 229, 242, .95); background: rgba(255,255,255,.94); backdrop-filter: blur(18px); box-shadow: 0 -8px 24px rgba(44,76,122,.08); }
-  .mobile-nav button { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; min-width: 44px; min-height: 48px; padding: 5px 2px; border: 0; border-radius: 12px; color: #76859b; background: transparent; font-size: 10px; }
+  .mobile-nav { position: fixed; inset: auto 0 0; z-index: 15; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); min-height: 76px; padding: 8px 5px max(10px, env(safe-area-inset-bottom)); border-top: 1px solid rgba(218, 229, 242, .95); background: rgba(255,255,255,.94); backdrop-filter: blur(18px); box-shadow: 0 -8px 24px rgba(44,76,122,.08); }
+  .mobile-nav button { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; min-width: 44px; min-height: 48px; padding: 5px 1px; border: 0; border-radius: 12px; color: #76859b; background: transparent; font-size: 9px; }
   .mobile-nav button.active { color: var(--blue-deep); background: #edf5ff; font-weight: 700; }
   .upload-layout, .coach-grid { grid-template-columns: 1fr; }
   .dropzone { min-height: 220px; border-radius: 18px; }
@@ -549,7 +554,7 @@ button:focus-visible, [role="button"]:focus-visible, input:focus-visible, select
   .form-two-col { grid-template-columns: 1fr; gap: 12px; }
   .modal-footer { padding-bottom: max(17px, env(safe-area-inset-bottom)); }
   .modal-footer .secondary-button, .modal-footer .primary-button { flex: 1; min-height: 46px; }
-  .toast { right: 16px; bottom: calc(88px + env(safe-area-inset-bottom)); left: 16px; justify-content: center; max-width: none; text-align: center; }
+  .toast { right: 16px; bottom: calc(88px + env(safe-area-inset-bottom)); left: 16px; justify-content: center; max-width: none; text-align: left; }
   .connection-dialog { width: 100%; max-height: calc(100svh - env(safe-area-inset-top)); border-radius: 22px 22px 0 0; }
   .connection-dialog-body { padding: 17px; }
   .connection-footer { padding-bottom: max(17px, env(safe-area-inset-bottom)); }
@@ -613,4 +618,230 @@ button:focus-visible, [role="button"]:focus-visible, input:focus-visible, select
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; }
+}
+
+.subscriptions-page { animation: installment-page-in .32s cubic-bezier(.2,.75,.25,1) both; }
+.subscription-add-button { min-height: 46px; white-space: nowrap; }
+.subscription-summary { display: grid; grid-template-columns: minmax(260px, 1.35fr) repeat(2, minmax(180px, .8fr)); gap: 13px; }
+.subscription-summary > article { min-height: 112px; display: flex; flex-direction: column; justify-content: center; gap: 6px; padding: 17px 19px; border: 1px solid rgba(222,232,245,.9); border-radius: var(--radius-lg); background: rgba(255,255,255,.94); box-shadow: var(--shadow); }
+.subscription-summary > article > small { color: var(--muted); font-size: 11px; font-weight: 600; }
+.subscription-summary > article > strong { color: var(--navy); font-size: 19px; letter-spacing: -.035em; font-variant-numeric: tabular-nums; }
+.subscription-summary > article > strong span { font-size: 12px; font-weight: 500; letter-spacing: 0; }
+.subscription-summary > article > span:last-child { color: var(--faint); font-size: 10px; }
+.subscription-summary .subscription-summary-main { position: relative; display: grid; grid-template-columns: auto 1fr; align-content: center; align-items: center; gap: 13px; border-color: #d3e5ff; background: linear-gradient(125deg, #f2f8ff, #fff 82%); }
+.subscription-summary-main > div { min-width: 0; display: grid; gap: 3px; }
+.subscription-summary-main .subscription-summary-icon { width: 41px; height: 41px; display: grid; place-items: center; border-radius: 13px; color: #347ce1; background: #e4f0ff; }
+.subscription-summary-main small { color: var(--muted); font-size: 11px; }
+.subscription-summary-main strong { color: var(--blue-deep); font-size: clamp(20px, 2.3vw, 27px); letter-spacing: -.045em; font-variant-numeric: tabular-nums; }
+.subscription-summary-main span:last-child { color: var(--faint); font-size: 10px; }
+.subscription-list-panel { padding-bottom: 5px; }
+.subscription-list-header { align-items: center; }
+.subscription-month-total { color: var(--blue-deep); font-size: 14px; white-space: nowrap; }
+.subscription-month-total small { color: var(--muted); font-size: 10px; font-weight: 500; }
+.subscription-list { display: grid; padding: 0 10px 7px; }
+.subscription-row { min-width: 0; display: flex; align-items: center; gap: 5px; padding: 5px; border-top: 1px solid #eff2f6; animation: installment-page-in .26s ease both; }
+.subscription-row.is-due { background: linear-gradient(90deg, rgba(242,248,255,.82), transparent 55%); }
+.subscription-row-main { min-width: 0; min-height: 74px; flex: 1; display: grid; grid-template-columns: 43px minmax(0, 1fr) minmax(92px, auto) 28px; align-items: center; gap: 12px; padding: 9px 8px; border: 0; border-radius: 13px; color: var(--text); background: transparent; font: inherit; text-align: left; cursor: pointer; transition: background .18s ease, transform .16s ease; }
+.subscription-row-main:hover { background: #f7faff; }
+.subscription-row-main:active { transform: scale(.995); }
+.subscription-app-mark { width: 42px; height: 42px; display: grid; place-items: center; border: 1px solid #d9e9ff; border-radius: 13px; color: #2e6cba; background: linear-gradient(145deg, #f5faff, #eaf3ff); font-size: 12px; font-weight: 750; letter-spacing: -.03em; }
+.subscription-row-copy { min-width: 0; display: grid; gap: 2px; }
+.subscription-row-copy strong { overflow: hidden; color: var(--navy); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.subscription-row-copy small { overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.subscription-due-label { color: var(--faint); font-size: 10px; }
+.subscription-due-label.due-now { color: #19764f; font-weight: 650; }
+.subscription-row-amount { display: grid; justify-items: end; gap: 3px; white-space: nowrap; }
+.subscription-row-amount strong { color: #344054; font-size: 13px; font-variant-numeric: tabular-nums; }
+.is-due .subscription-row-amount strong { color: var(--blue-deep); }
+.subscription-row-amount small { color: var(--muted); font-size: 9px; }
+.subscription-row-chevron { display: grid; place-items: center; color: #98a6b8; }
+.subscription-delete-button { width: 40px; height: 40px; flex: 0 0 auto; color: #b54743; }
+.subscription-delete-button:hover { border-color: #f0c4c2; background: #fff6f5; }
+.subscription-empty { min-height: 240px; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 25px 17px; text-align: center; }
+.subscription-empty > span { width: 47px; height: 47px; display: grid; place-items: center; margin-bottom: 11px; border-radius: 15px; color: var(--blue); background: var(--blue-soft); }
+.subscription-empty strong { color: var(--navy); font-size: 14px; }
+.subscription-empty small { max-width: 350px; margin-top: 5px; color: var(--muted); font-size: 11px; line-height: 1.55; }
+.subscription-empty .secondary-button { margin-top: 15px; }
+.subscription-backdrop { z-index: 38; }
+.subscription-form-modal, .subscription-detail-modal { width: min(570px, 100%); max-height: min(760px, 92vh); overflow: auto; border: 1px solid rgba(228,236,247,.9); border-radius: 20px; background: #fff; box-shadow: 0 28px 80px rgba(13,33,61,.24); animation: installment-modal-in .24s cubic-bezier(.2,.75,.25,1) both; }
+.subscription-form-body { gap: 14px; padding: 20px 24px; }
+.subscription-form-body input, .subscription-form-body select, .subscription-form-body textarea { min-height: 43px; border-radius: 10px; font-size: 14px; }
+.subscription-form-body textarea { min-height: 78px; }
+.subscription-detail-content { padding: 20px 24px 10px; }
+.subscription-detail-amount { display: flex; align-items: center; gap: 12px; padding: 15px; border: 1px solid #dceaff; border-radius: 15px; background: #f6faff; }
+.subscription-detail-amount > span { width: 39px; height: 39px; display: grid; place-items: center; flex: 0 0 auto; border-radius: 12px; color: var(--blue); background: #e6f0ff; }
+.subscription-detail-amount > div { min-width: 0; flex: 1; display: grid; gap: 2px; }
+.subscription-detail-amount small { color: var(--muted); font-size: 10px; }
+.subscription-detail-amount strong { color: var(--navy); font-size: 21px; font-variant-numeric: tabular-nums; }
+.subscription-detail-amount em { color: var(--muted); font-size: 10px; font-style: normal; white-space: nowrap; }
+.subscription-detail-list { display: grid; margin: 12px 0 0; }
+.subscription-detail-list > div { display: grid; grid-template-columns: minmax(115px, .7fr) 1fr; gap: 12px; padding: 12px 2px; border-bottom: 1px solid #eff2f6; }
+.subscription-detail-list dt { color: var(--muted); font-size: 11px; }
+.subscription-detail-list dd { margin: 0; color: var(--text); font-size: 12px; font-weight: 600; text-align: right; overflow-wrap: anywhere; }
+.subscription-detail-footer { justify-content: space-between; }
+.review-modal-footer .danger-button { margin-right: auto; }
+.installment-delete-row { min-height: 53px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 12px; border-top: 1px solid #edf1f6; color: var(--muted); font-size: 10px; }
+.danger-button, .danger-confirm-button { display: inline-flex; min-height: 40px; align-items: center; justify-content: center; gap: 7px; padding: 8px 12px; border: 1px solid #f0d2d0; border-radius: 11px; color: #b42318; background: #fff; font-size: 11px; font-weight: 650; white-space: nowrap; transition: background .16s ease, border-color .16s ease, transform .16s ease; }
+.danger-button:hover { border-color: #e9a9a5; background: #fff5f4; }
+.danger-confirm-button { min-width: 127px; border-color: #c9342d; color: #fff; background: #c9342d; box-shadow: 0 7px 14px rgba(201,52,45,.17); }
+.danger-confirm-button:hover:not(:disabled) { border-color: #a92a24; background: #a92a24; }
+.danger-confirm-backdrop { z-index: 70; }
+.delete-confirm-dialog { width: min(410px, 100%); display: flex; flex-direction: column; align-items: center; padding: 27px 27px 23px; border: 1px solid #f0e1e0; border-radius: 19px; background: #fff; box-shadow: 0 28px 80px rgba(13,33,61,.28); text-align: center; animation: installment-modal-in .2s cubic-bezier(.2,.75,.25,1) both; }
+.delete-confirm-icon { width: 48px; height: 48px; display: grid; place-items: center; margin-bottom: 13px; border-radius: 15px; color: #bd322b; background: #fff0ef; }
+.delete-confirm-dialog h2 { margin: 0; color: var(--navy); font-size: 17px; letter-spacing: -.025em; }
+.delete-confirm-name { max-width: 100%; margin-top: 7px; overflow: hidden; color: #a92a24; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.delete-confirm-dialog p { margin: 9px 0 18px; color: var(--muted); font-size: 11px; line-height: 1.6; }
+.delete-confirm-actions { width: 100%; display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+.delete-confirm-actions button { min-height: 45px; }
+
+@media (prefers-reduced-motion: no-preference) {
+  :root {
+    --motion-soft: cubic-bezier(.2, .75, .25, 1);
+    --motion-spring: cubic-bezier(.2, .9, .25, 1.28);
+  }
+
+  button:not(:disabled) {
+    transition-property: transform, box-shadow, background-color, border-color, color, filter;
+    transition-duration: .18s;
+    transition-timing-function: var(--motion-soft);
+  }
+
+  button:not(:disabled):active { transform: scale(.965); filter: saturate(1.08); }
+
+  @media (hover: hover) and (pointer: fine) {
+    .primary-button:hover:not(:disabled), .top-upload:hover:not(:disabled), .subscription-add-button:hover:not(:disabled) {
+      transform: translateY(-2px);
+      box-shadow: 0 11px 22px rgba(57, 135, 246, .22);
+    }
+    .secondary-button:hover:not(:disabled), .icon-button:hover:not(:disabled), .danger-button:hover:not(:disabled) { transform: translateY(-1px); }
+    .nav-item:hover:not(:disabled), .mobile-nav button:hover:not(:disabled) { transform: translateX(2px); }
+    .table-body:hover:not(:disabled), .pending-row:hover:not(:disabled), .subscription-row-main:hover:not(:disabled) { transform: translateX(2px); }
+  }
+
+  .active-view { animation: view-enter .28s var(--motion-soft) both; }
+  .modal-backdrop { animation: backdrop-reveal .22s ease-out both; }
+  .review-modal, .connection-dialog, .installment-form-modal, .subscription-form-modal, .subscription-detail-modal, .delete-confirm-dialog {
+    animation: modal-spring-in .34s var(--motion-spring) both;
+    transform-origin: center bottom;
+  }
+  .toast { animation: success-toast-in .42s var(--motion-spring) both; }
+  .toast .icon { transform-origin: center; animation: success-check-pop .46s .06s var(--motion-spring) both; }
+
+  .nav-item.active > .icon, .mobile-nav button.active .icon { animation: selected-icon-pop .28s var(--motion-spring) both; }
+  .installment-bank-choice.selected { animation: choice-highlight .28s var(--motion-spring) both; }
+  .installment-bank-choice .bank-choice-check { transition: transform .2s var(--motion-spring), color .16s ease, background-color .16s ease; }
+  .installment-bank-choice.selected .bank-choice-check { animation: selected-check-pop .26s var(--motion-spring) both; }
+  .payment-toggle.paid-confirming .payment-check { animation: selected-check-pop .3s var(--motion-spring) both; }
+  .installment-schedule-row.paid-confirming { animation: installment-paid-confirmation .66s ease-out both; }
+  .installment-schedule-row.paid-confirming .payment-toggle { animation: paid-toggle-confirmation .44s var(--motion-spring) both; }
+  .ocr-progress > span::after { animation: ocr-progress-glint 1.25s ease-in-out infinite; }
+  button[aria-expanded="true"] .installment-expand, button[aria-pressed="true"] .payment-check { transition: transform .22s var(--motion-spring), background-color .18s ease; }
+
+  .review-form input, .review-form select, .review-form textarea,
+  .subscription-form-body input, .subscription-form-body select, .subscription-form-body textarea,
+  .search-field, .select-field, .month-control {
+    transition: border-color .2s ease, box-shadow .2s ease, background-color .2s ease;
+  }
+  .search-field:focus-within, .select-field:focus-within, .month-control:focus-within {
+    border-color: #9bc1f8;
+    box-shadow: 0 0 0 3px rgba(57, 135, 246, .12);
+  }
+  .installment-progress-track span { transition: width .55s var(--motion-soft); }
+}
+
+@keyframes backdrop-reveal {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes modal-spring-in {
+  from { opacity: 0; transform: translateY(14px) scale(.975); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes success-toast-in {
+  0% { opacity: 0; transform: translateY(14px) scale(.96); }
+  72% { opacity: 1; transform: translateY(-2px) scale(1.01); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes ocr-progress-glint {
+  from { transform: translateX(0); }
+  to { transform: translateX(470%); }
+}
+
+@keyframes installment-paid-confirmation {
+  0% { background-color: #d8f8e6; box-shadow: inset 3px 0 0 #23ad75; }
+  100% { background-color: #f2fbf6; box-shadow: inset 0 0 0 transparent; }
+}
+
+@keyframes paid-toggle-confirmation {
+  0% { transform: scale(.96); }
+  65% { transform: scale(1.035); }
+  100% { transform: scale(1); }
+}
+
+@keyframes success-check-pop {
+  0% { opacity: 0; transform: scale(.45) rotate(-24deg); }
+  68% { opacity: 1; transform: scale(1.2) rotate(5deg); }
+  100% { opacity: 1; transform: scale(1) rotate(0); }
+}
+
+@keyframes selected-icon-pop {
+  0% { transform: scale(.82); }
+  65% { transform: scale(1.16); }
+  100% { transform: scale(1); }
+}
+
+@keyframes selected-check-pop {
+  0% { opacity: .5; transform: scale(.55); }
+  72% { opacity: 1; transform: scale(1.2); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+@keyframes choice-highlight {
+  0% { transform: scale(.97); }
+  72% { transform: scale(1.025); }
+  100% { transform: scale(1); }
+}
+
+@media (max-width: 900px) {
+  .subscription-summary { grid-template-columns: minmax(0, 1.3fr) repeat(2, minmax(135px, .8fr)); gap: 9px; }
+  .subscription-summary > article { min-height: 103px; padding: 13px; }
+  .subscription-summary > article > strong { font-size: 16px; }
+}
+
+@media (max-width: 760px) {
+  .subscriptions-page > .page-intro { align-items: stretch; }
+  .subscription-add-button { width: 100%; min-height: 47px; }
+  .subscription-summary { grid-template-columns: 1fr 1fr; gap: 9px; }
+  .subscription-summary .subscription-summary-main { grid-column: 1 / -1; min-height: 106px; }
+  .subscription-summary > article { min-height: 88px; padding: 12px; border-radius: 15px; }
+  .subscription-summary > article > strong { font-size: 15px; }
+  .subscription-summary > article > span:last-child { font-size: 9px; }
+  .subscription-list-header { align-items: start; padding: 15px 14px 11px; }
+  .subscription-list { padding: 0 6px 6px; }
+  .subscription-row { gap: 2px; padding: 4px 2px; }
+  .subscription-row-main { min-height: 76px; grid-template-columns: 37px minmax(0, 1fr) auto 17px; gap: 8px; padding: 8px 5px; }
+  .subscription-app-mark { width: 36px; height: 36px; border-radius: 12px; font-size: 10px; }
+  .subscription-row-copy strong { font-size: 12px; }
+  .subscription-row-copy small, .subscription-due-label { font-size: 9px; }
+  .subscription-row-amount strong { font-size: 11px; }
+  .subscription-row-amount small { font-size: 8px; }
+  .subscription-row-chevron .icon { width: 15px; height: 15px; }
+  .subscription-delete-button { width: 38px; height: 40px; }
+  .subscription-form-modal, .subscription-detail-modal { width: 100%; max-height: calc(100svh - env(safe-area-inset-top)); border-radius: 22px 22px 0 0; }
+  .subscription-form-body { gap: 12px; padding: 16px 17px; }
+  .subscription-form-body .form-two-col { grid-template-columns: 1fr; gap: 12px; }
+  .subscription-form-modal .modal-footer { position: sticky; bottom: 0; padding: 13px 17px max(14px, env(safe-area-inset-bottom)); background: rgba(255,255,255,.95); backdrop-filter: blur(12px); }
+  .subscription-form-modal .modal-footer button { flex: 1; min-height: 46px; }
+  .subscription-detail-content { padding: 16px 17px 8px; }
+  .subscription-detail-list > div { grid-template-columns: 105px 1fr; }
+  .subscription-detail-footer { padding: 13px 17px max(14px, env(safe-area-inset-bottom)); }
+  .subscription-detail-footer button { min-height: 46px; }
+  .installment-delete-row { align-items: flex-start; flex-direction: column; }
+  .installment-delete-row .danger-button { width: 100%; }
+  .review-modal-footer .danger-button { flex: 0 0 auto !important; }
+  .delete-confirm-backdrop { align-items: end; padding: 0; }
+  .delete-confirm-dialog { width: 100%; padding: 25px 19px max(20px, env(safe-area-inset-bottom)); border-radius: 22px 22px 0 0; }
 }

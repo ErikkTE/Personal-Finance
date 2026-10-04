@@ -32,6 +32,8 @@ Do not place the shared secret in browser code, a `VITE_*` variable, a public do
 - `saveTransaction`: writes a recoverable row, uploads and links optional evidence, and resumes retries with the same transaction ID without appending a duplicate.
 - `softDeleteTransaction`: stores the previous status in an additional `สถานะก่อนซ่อน` column and changes the row status to `ลบแล้ว`; it does not remove the row or the evidence file.
 - `restoreMonthTransactions`: restores every hidden row in the selected budget month and returns the refreshed transaction list.
+- `restoreTransaction`: restores one hidden transaction and its saved status for the delete toast's Undo action.
+- `restoreInstallment` and `restoreSubscription`: clear the soft-delete timestamp for one plan or subscription.
 
 Rows hidden before this restore feature was added do not have a saved previous status, so restoring those rows sets their status to `ยืนยันแล้ว`.
 
