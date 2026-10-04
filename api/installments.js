@@ -113,7 +113,15 @@ export default async function handler(req, res) {
       return res.status(200).json({ installment: result.installment });
     }
 
-    res.setHeader("Allow", "GET, POST, PATCH");
+    if (req.method === "DELETE") {
+      action = "softDeleteInstallment";
+      const id = String(req.body?.id || "").trim();
+      if (!/^[A-Za-z0-9_-]{8,80}$/.test(id)) throw new Error("ไม่พบรหัสแผนผ่อน");
+      const result = await callAppsScript({ action, requestId, id });
+      return res.status(200).json(result);
+    }
+
+    res.setHeader("Allow", "GET, POST, PATCH, DELETE");
     return res.status(405).json({ error: "Method not allowed" });
   } catch (error) {
     const message = error instanceof Error ? error.message : "ไม่สามารถบันทึกแผนผ่อนได้";

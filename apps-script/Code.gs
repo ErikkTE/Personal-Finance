@@ -1,8 +1,10 @@
 const TAB_TRANSACTIONS = "Transactions";
 const TAB_INSTALLMENTS = "Installments";
 const TAB_INSTALLMENT_PAYMENTS = "Installment Payments";
-const INSTALLMENT_HEADERS = ["Installment ID", "รายการสินค้า", "ราคาสินค้า", "เงินดาวน์", "ดอกเบี้ยรวม (%)", "จำนวนเดือน", "ธนาคาร", "เดือนเริ่มชำระ", "ยอดรวม", "วันที่บันทึก"];
+const TAB_SUBSCRIPTIONS = "Subscriptions";
+const INSTALLMENT_HEADERS = ["Installment ID", "รายการสินค้า", "ราคาสินค้า", "เงินดาวน์", "ดอกเบี้ยรวม (%)", "จำนวนเดือน", "ธนาคาร", "เดือนเริ่มชำระ", "ยอดรวม", "วันที่บันทึก", "ลบเมื่อ"];
 const INSTALLMENT_PAYMENT_HEADERS = ["Installment ID", "งวดที่", "เดือนครบกำหนด", "จำนวนเงิน", "ชำระแล้ว", "วันที่ชำระ"];
+const SUBSCRIPTION_HEADERS = ["Subscription ID", "ชื่อบริการ", "จำนวนเงิน", "รอบเรียกเก็บ", "วันเรียกเก็บครั้งถัดไป", "หมวดหมู่", "ช่องทางชำระ", "หมายเหตุ", "วันที่บันทึก", "ลบเมื่อ"];
 const PREVIOUS_STATUS_HEADER = "สถานะก่อนซ่อน";
 const RESTORABLE_STATUSES = ["ยืนยันแล้ว", "รอตรวจสอบ"];
 const REQUIRED_HEADERS = [
@@ -55,6 +57,18 @@ function doPost(event) {
         break;
       case "setInstallmentPayment":
         data = setInstallmentPayment_(request.id, request.installmentNumber, request.paid);
+        break;
+      case "softDeleteInstallment":
+        data = softDeleteInstallment_(request.id);
+        break;
+      case "listSubscriptions":
+        data = { subscriptions: listSubscriptions_() };
+        break;
+      case "saveSubscription":
+        data = saveSubscription_(request.subscription);
+        break;
+      case "softDeleteSubscription":
+        data = softDeleteSubscription_(request.id);
         break;
       case "softDeleteTransaction":
         data = softDeleteTransaction_(request.id);
@@ -184,8 +198,135 @@ function listInstallments_() {
     const id = String(readCell_(row, planColumns, "Installment ID") || "");
     return installmentFromRow_(row, planColumns, paymentsByPlan[id] || []);
   }).filter(function (plan) {
-    return Boolean(plan.id);
+    return Boolean(plan.id) && !plan.deletedAt;
   }).reverse();
+}
+
+function softDeleteInstallment_(id) {
+  const planId = String(id || "").trim();
+  if (!/^[A-Za-z0-9_-]{8,80}$/.test(planId)) throw new Error("Installment ID is invalid");
+  const lock = LockService.getScriptLock();
+  lock.waitLock(15000);
+  try {
+    const sheets = ensureInstallmentSheets_();
+    const sheet = sheets.master;
+    const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getDisplayValues()[0];
+    const columns = columnIndexes_(headers, INSTALLMENT_HEADERS, "Installments");
+    const rowNumber = findInstallmentRow_(sheet, columns["Installment ID"], planId);
+    if (rowNumber < 2) throw new Error("Installment was not found");
+    sheet.getRange(rowNumber, columns["ลบเมื่อ"] + 1).setValue(new Date());
+    return { ok: true, id: planId, deleted: true };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function listSubscriptions_() {
+  const sheet = ensureSubscriptionsSheet_();
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return [];
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getDisplayValues()[0];
+  const columns = columnIndexes_(headers, SUBSCRIPTION_HEADERS, "Subscriptions");
+  return sheet.getRange(2, 1, lastRow - 1, headers.length).getValues().map(function (row) {
+    return subscriptionFromRow_(row, columns);
+  }).filter(function (item) {
+    return Boolean(item.id) && !item.deletedAt;
+  }).reverse();
+}
+
+function saveSubscription_(input) {
+  if (!input || typeof input !== "object") throw new Error("Subscription is required");
+  const id = String(input.id || "").trim();
+  const name = String(input.name || "").trim().slice(0, 120);
+  const amount = Number(input.amount);
+  const cycle = String(input.cycle || "");
+  const nextBillingDate = String(input.nextBillingDate || "");
+  const category = String(input.category || "อื่นๆ").trim().slice(0, 60);
+  const paymentMethod = String(input.paymentMethod || "").trim().slice(0, 80);
+  const note = String(input.note || "").trim().slice(0, 500);
+  if (!/^[A-Za-z0-9_-]{8,80}$/.test(id) || !name || !Number.isFinite(amount) || amount <= 0 || amount > 100000000) {
+    throw new Error("Subscription data is invalid");
+  }
+  if (["monthly", "yearly"].indexOf(cycle) < 0 || !/^\d{4}-\d{2}-\d{2}$/.test(nextBillingDate) || !paymentMethod) {
+    throw new Error("Subscription cycle, billing date or payment method is invalid");
+  }
+  const [year, month, day] = nextBillingDate.split("-").map(Number);
+  const parsedDate = new Date(Date.UTC(year, month - 1, day));
+  if (parsedDate.getUTCFullYear() !== year || parsedDate.getUTCMonth() !== month - 1 || parsedDate.getUTCDate() !== day) {
+    throw new Error("Subscription billing date is invalid");
+  }
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(15000);
+  try {
+    const sheet = ensureSubscriptionsSheet_();
+    const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getDisplayValues()[0];
+    const columns = columnIndexes_(headers, SUBSCRIPTION_HEADERS, "Subscriptions");
+    const existingRow = findInstallmentRow_(sheet, columns["Subscription ID"], id);
+    const rowNumber = existingRow > 0 ? existingRow : Math.max(sheet.getLastRow() + 1, 2);
+    ensureSheetRowCapacity_(sheet, rowNumber);
+    const row = existingRow > 0
+      ? sheet.getRange(rowNumber, 1, 1, headers.length).getValues()[0]
+      : new Array(headers.length).fill("");
+    putCell_(row, columns, "Subscription ID", id);
+    putCell_(row, columns, "ชื่อบริการ", name);
+    putCell_(row, columns, "จำนวนเงิน", amount);
+    putCell_(row, columns, "รอบเรียกเก็บ", cycle);
+    putCell_(row, columns, "วันเรียกเก็บครั้งถัดไป", Utilities.parseDate(nextBillingDate, "Asia/Bangkok", "yyyy-MM-dd"));
+    putCell_(row, columns, "หมวดหมู่", category);
+    putCell_(row, columns, "ช่องทางชำระ", paymentMethod);
+    putCell_(row, columns, "หมายเหตุ", note);
+    if (!existingRow) putCell_(row, columns, "วันที่บันทึก", new Date());
+    putCell_(row, columns, "ลบเมื่อ", "");
+    sheet.getRange(rowNumber, 1, 1, row.length).setValues([row]);
+    sheet.getRange(rowNumber, columns["วันเรียกเก็บครั้งถัดไป"] + 1).setNumberFormat("yyyy-mm-dd");
+    const saved = listSubscriptions_().filter(function (item) { return item.id === id; })[0];
+    if (!saved) throw new Error("Subscription was not found after saving");
+    return { subscription: saved };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function softDeleteSubscription_(id) {
+  const subscriptionId = String(id || "").trim();
+  if (!/^[A-Za-z0-9_-]{8,80}$/.test(subscriptionId)) throw new Error("Subscription ID is invalid");
+  const lock = LockService.getScriptLock();
+  lock.waitLock(15000);
+  try {
+    const sheet = ensureSubscriptionsSheet_();
+    const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getDisplayValues()[0];
+    const columns = columnIndexes_(headers, SUBSCRIPTION_HEADERS, "Subscriptions");
+    const rowNumber = findInstallmentRow_(sheet, columns["Subscription ID"], subscriptionId);
+    if (rowNumber < 2) throw new Error("Subscription was not found");
+    sheet.getRange(rowNumber, columns["ลบเมื่อ"] + 1).setValue(new Date());
+    return { ok: true, id: subscriptionId, deleted: true };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function subscriptionFromRow_(row, columns) {
+  return {
+    id: String(readCell_(row, columns, "Subscription ID") || ""),
+    name: String(readCell_(row, columns, "ชื่อบริการ") || ""),
+    amount: Number(readCell_(row, columns, "จำนวนเงิน") || 0),
+    cycle: String(readCell_(row, columns, "รอบเรียกเก็บ") || "monthly"),
+    nextBillingDate: dateToIso_(readCell_(row, columns, "วันเรียกเก็บครั้งถัดไป")),
+    category: String(readCell_(row, columns, "หมวดหมู่") || "อื่นๆ"),
+    paymentMethod: String(readCell_(row, columns, "ช่องทางชำระ") || ""),
+    note: String(readCell_(row, columns, "หมายเหตุ") || ""),
+    createdAt: dateToIso_(readCell_(row, columns, "วันที่บันทึก")),
+    deletedAt: dateToIso_(readCell_(row, columns, "ลบเมื่อ")),
+  };
+}
+
+function ensureSubscriptionsSheet_() {
+  const spreadsheet = getSpreadsheet_();
+  let sheet = spreadsheet.getSheetByName(TAB_SUBSCRIPTIONS);
+  if (!sheet) sheet = spreadsheet.insertSheet(TAB_SUBSCRIPTIONS);
+  ensureTableHeaders_(sheet, SUBSCRIPTION_HEADERS, "Subscriptions");
+  return sheet;
 }
 
 function saveInstallment_(input) {
@@ -327,6 +468,7 @@ function installmentFromRow_(row, columns, schedule) {
     startMonth: monthToIso_(readCell_(row, columns, "เดือนเริ่มชำระ")),
     totalAmount: Number(readCell_(row, columns, "ยอดรวม") || totalAmount),
     createdAt: dateToIso_(readCell_(row, columns, "วันที่บันทึก")),
+    deletedAt: dateToIso_(readCell_(row, columns, "ลบเมื่อ")),
     schedule: schedule.sort(function (left, right) { return left.installmentNumber - right.installmentNumber; }),
   };
 }

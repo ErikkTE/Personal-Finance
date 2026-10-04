@@ -145,3 +145,32 @@ export async function setInstallmentPayment({ id, installmentNumber, paid }) {
   if (!result?.installment) throw new Error("Google Sheets ไม่ได้ยืนยันสถานะการชำระ");
   return result.installment;
 }
+
+export async function removeInstallment(id) {
+  return requestJson("/api/installments", {
+    method: "DELETE",
+    body: JSON.stringify({ id }),
+  });
+}
+
+export async function listSubscriptions() {
+  const result = await requestJson("/api/subscriptions");
+  if (!Array.isArray(result?.subscriptions)) throw new Error("รูปแบบข้อมูลสมัครบริการจาก Google Sheets ไม่ถูกต้อง");
+  return result.subscriptions;
+}
+
+export async function saveSubscription(subscription) {
+  const result = await requestJson("/api/subscriptions", {
+    method: "POST",
+    body: JSON.stringify({ subscription }),
+  });
+  if (!result?.subscription) throw new Error("Google Sheets ไม่ได้ยืนยันการบันทึกรายการสมัครบริการ");
+  return result.subscription;
+}
+
+export async function removeSubscription(id) {
+  return requestJson("/api/subscriptions", {
+    method: "DELETE",
+    body: JSON.stringify({ id }),
+  });
+}

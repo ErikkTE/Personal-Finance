@@ -25,6 +25,7 @@ const paths = {
   lightbulb: ["M9 18h6", "M10 22h4", "M8.5 14.5C7.6 13.6 7 12.4 7 11a5 5 0 0 1 10 0c0 1.4-.6 2.6-1.5 3.5-.8.8-1.5 1.4-1.5 2.5h-4c0-1.1-.7-1.7-1.5-2.5Z"],
   image: ["M4 5h16v14H4z", "m4 16 4-4 3 3 2-2 5 5", "M9 9h.01"],
   plus: ["M12 5v14", "M5 12h14"],
+  trash: ["M3 6h18", "M8 6V4h8v2", "m19 6-1 14H6L5 6", "M10 11v5", "M14 11v5"],
 };
 
 export function Icon({ name, size = 20, strokeWidth = 1.8, className = "" }) {
