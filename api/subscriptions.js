@@ -56,6 +56,14 @@ export default async function handler(req, res) {
       return res.status(201).json({ subscription: result.subscription });
     }
 
+    if (req.method === "PATCH") {
+      action = "restoreSubscription";
+      const id = String(req.body?.id || "").trim();
+      if (!/^[A-Za-z0-9_-]{8,80}$/.test(id)) throw new Error("ไม่พบรหัสบริการ");
+      const result = await callAppsScript({ action, requestId, id });
+      return res.status(200).json({ restored: Boolean(result?.restored), id });
+    }
+
     if (req.method === "DELETE") {
       action = "softDeleteSubscription";
       const id = String(req.body?.id || "").trim();
@@ -64,7 +72,7 @@ export default async function handler(req, res) {
       return res.status(200).json(result);
     }
 
-    res.setHeader("Allow", "GET, POST, DELETE");
+    res.setHeader("Allow", "GET, POST, PATCH, DELETE");
     return res.status(405).json({ error: "Method not allowed" });
   } catch (error) {
     const message = error instanceof Error ? error.message : "ไม่สามารถบันทึกรายการสมัครบริการได้";

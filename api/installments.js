@@ -101,8 +101,15 @@ export default async function handler(req, res) {
     }
 
     if (req.method === "PATCH") {
-      action = "setInstallmentPayment";
       const id = String(req.body?.id || "").trim();
+      if (req.body?.restore === true) {
+        action = "restoreInstallment";
+        if (!/^[A-Za-z0-9_-]{8,80}$/.test(id)) throw new Error("ไม่พบรหัสแผนผ่อน");
+        const result = await callAppsScript({ action, requestId, id });
+        return res.status(200).json({ restored: Boolean(result?.restored), id });
+      }
+
+      action = "setInstallmentPayment";
       const installmentNumber = Number(req.body?.installmentNumber);
       const paid = req.body?.paid;
       if (!/^[A-Za-z0-9_-]{8,80}$/.test(id)) throw new Error("ไม่พบรหัสแผนผ่อน");

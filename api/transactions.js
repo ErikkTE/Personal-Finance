@@ -83,6 +83,14 @@ export default async function handler(req, res) {
     }
 
     if (req.method === "PATCH") {
+      if (req.body?.restore === true) {
+        action = "restoreTransaction";
+        const id = String(req.body?.id || "").trim();
+        if (!id || id.length > 80) return res.status(400).json({ error: "ไม่พบรหัสรายการ" });
+        const result = await callAppsScript({ action, requestId, id });
+        return res.status(200).json({ restored: Boolean(result?.restored), id });
+      }
+
       action = "restoreMonthTransactions";
       const budgetMonth = String(req.body?.budgetMonth || "").trim();
       if (!validMonth(budgetMonth)) return res.status(400).json({ error: "เดือนงบประมาณไม่ถูกต้อง" });

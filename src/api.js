@@ -111,6 +111,15 @@ export async function removeTransaction(id) {
   });
 }
 
+export async function restoreTransaction(id) {
+  const result = await requestJson("/api/transactions", {
+    method: "PATCH",
+    body: JSON.stringify({ id, restore: true }),
+  });
+  if (!result?.restored) throw new Error("เซิร์ฟเวอร์ยืนยันการคืนรายการไม่สำเร็จ");
+  return result;
+}
+
 export async function restoreHiddenTransactions(budgetMonth) {
   const result = await requestJson("/api/transactions", {
     method: "PATCH",
@@ -153,6 +162,15 @@ export async function removeInstallment(id) {
   });
 }
 
+export async function restoreInstallment(id) {
+  const result = await requestJson("/api/installments", {
+    method: "PATCH",
+    body: JSON.stringify({ id, restore: true }),
+  });
+  if (!result?.restored) throw new Error("เซิร์ฟเวอร์ยืนยันการคืนแผนผ่อนไม่สำเร็จ");
+  return result;
+}
+
 export async function listSubscriptions() {
   const result = await requestJson("/api/subscriptions");
   if (!Array.isArray(result?.subscriptions)) throw new Error("รูปแบบข้อมูลสมัครบริการจาก Google Sheets ไม่ถูกต้อง");
@@ -173,4 +191,13 @@ export async function removeSubscription(id) {
     method: "DELETE",
     body: JSON.stringify({ id }),
   });
+}
+
+export async function restoreSubscription(id) {
+  const result = await requestJson("/api/subscriptions", {
+    method: "PATCH",
+    body: JSON.stringify({ id, restore: true }),
+  });
+  if (!result?.restored) throw new Error("เซิร์ฟเวอร์ยืนยันการคืนบริการไม่สำเร็จ");
+  return result;
 }

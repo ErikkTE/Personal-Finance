@@ -46,6 +46,9 @@ function doPost(event) {
       case "restoreMonthTransactions":
         data = restoreMonthTransactions_(request.budgetMonth);
         break;
+      case "restoreTransaction":
+        data = restoreTransaction_(request.id);
+        break;
       case "saveTransaction":
         data = saveTransaction_(request.transaction, request.evidence);
         break;
@@ -61,6 +64,9 @@ function doPost(event) {
       case "softDeleteInstallment":
         data = softDeleteInstallment_(request.id);
         break;
+      case "restoreInstallment":
+        data = restoreInstallment_(request.id);
+        break;
       case "listSubscriptions":
         data = { subscriptions: listSubscriptions_() };
         break;
@@ -69,6 +75,9 @@ function doPost(event) {
         break;
       case "softDeleteSubscription":
         data = softDeleteSubscription_(request.id);
+        break;
+      case "restoreSubscription":
+        data = restoreSubscription_(request.id);
         break;
       case "softDeleteTransaction":
         data = softDeleteTransaction_(request.id);
@@ -221,6 +230,25 @@ function softDeleteInstallment_(id) {
   }
 }
 
+function restoreInstallment_(id) {
+  const planId = String(id || "").trim();
+  if (!/^[A-Za-z0-9_-]{8,80}$/.test(planId)) throw new Error("Installment ID is invalid");
+  const lock = LockService.getScriptLock();
+  lock.waitLock(15000);
+  try {
+    const sheets = ensureInstallmentSheets_();
+    const sheet = sheets.master;
+    const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getDisplayValues()[0];
+    const columns = columnIndexes_(headers, INSTALLMENT_HEADERS, "Installments");
+    const rowNumber = findInstallmentRow_(sheet, columns["Installment ID"], planId);
+    if (rowNumber < 2) throw new Error("Installment was not found");
+    sheet.getRange(rowNumber, columns["ลบเมื่อ"] + 1).clearContent();
+    return { ok: true, id: planId, restored: true };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 function listSubscriptions_() {
   const sheet = ensureSubscriptionsSheet_();
   const lastRow = sheet.getLastRow();
@@ -301,6 +329,24 @@ function softDeleteSubscription_(id) {
     if (rowNumber < 2) throw new Error("Subscription was not found");
     sheet.getRange(rowNumber, columns["ลบเมื่อ"] + 1).setValue(new Date());
     return { ok: true, id: subscriptionId, deleted: true };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function restoreSubscription_(id) {
+  const subscriptionId = String(id || "").trim();
+  if (!/^[A-Za-z0-9_-]{8,80}$/.test(subscriptionId)) throw new Error("Subscription ID is invalid");
+  const lock = LockService.getScriptLock();
+  lock.waitLock(15000);
+  try {
+    const sheet = ensureSubscriptionsSheet_();
+    const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getDisplayValues()[0];
+    const columns = columnIndexes_(headers, SUBSCRIPTION_HEADERS, "Subscriptions");
+    const rowNumber = findInstallmentRow_(sheet, columns["Subscription ID"], subscriptionId);
+    if (rowNumber < 2) throw new Error("Subscription was not found");
+    sheet.getRange(rowNumber, columns["ลบเมื่อ"] + 1).clearContent();
+    return { ok: true, id: subscriptionId, restored: true };
   } finally {
     lock.releaseLock();
   }
@@ -705,6 +751,30 @@ function restoreMonthTransactions_(budgetMonth) {
       restoredCount: restoredCount,
       transactions: listTransactions_(),
     };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function restoreTransaction_(id) {
+  const transactionId = String(id || "").trim();
+  if (!transactionId || transactionId.length > 80) throw new Error("Transaction ID is invalid");
+  const lock = LockService.getScriptLock();
+  lock.waitLock(15000);
+  try {
+    const sheet = getTransactionsSheet_();
+    const previousStatusColumn = ensurePreviousStatusColumn_(sheet);
+    const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getDisplayValues()[0];
+    const columns = headerIndexes_(headers);
+    const rowNumber = findTransactionRow_(sheet, columns["Transaction ID"], transactionId);
+    if (rowNumber < 2) throw new Error("Transaction was not found");
+    const statusCell = sheet.getRange(rowNumber, columns["สถานะ"] + 1);
+    if (String(statusCell.getValue() || "").trim() === "ลบแล้ว") {
+      const savedStatus = String(sheet.getRange(rowNumber, previousStatusColumn + 1).getValue() || "").trim();
+      statusCell.setValue(RESTORABLE_STATUSES.indexOf(savedStatus) >= 0 ? savedStatus : "ยืนยันแล้ว");
+      sheet.getRange(rowNumber, previousStatusColumn + 1).clearContent();
+    }
+    return { ok: true, id: transactionId, restored: true };
   } finally {
     lock.releaseLock();
   }

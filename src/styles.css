@@ -251,12 +251,17 @@ button:focus-visible, [role="button"]:focus-visible, input:focus-visible, select
 .qr-review-note .icon { flex: 0 0 auto; margin-top: 1px; }
 .qr-review-note-warning { border-color: #f5d7a2; color: #805713; background: #fff8e9; }
 .ocr-progress { display: block; height: 4px; margin-top: 7px; overflow: hidden; border-radius: 4px; background: #d9e8fb; }
-.ocr-progress > span { display: block; height: 100%; border-radius: inherit; background: var(--blue); transition: width .2s ease; }
+.ocr-progress > span { position: relative; display: block; height: 100%; overflow: hidden; border-radius: inherit; background: var(--blue); transition: width .24s ease; }
+.ocr-progress > span::after { position: absolute; inset: 0 auto 0 -30%; width: 30%; background: linear-gradient(90deg, transparent, rgba(255,255,255,.8), transparent); content: ""; }
 .ocr-text-details { padding-top: 2px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; }
 .ocr-text-details summary { padding: 8px 0; color: var(--blue-deep); cursor: pointer; font-weight: 600; }
 .ocr-text-details pre { max-height: 160px; margin: 0 0 8px; overflow: auto; color: #475467; white-space: pre-wrap; overflow-wrap: anywhere; font-family: inherit; font-size: 11px; line-height: 1.6; }
 .modal-footer { display: flex; justify-content: flex-end; gap: 9px; padding: 15px 24px 21px; border-top: 1px solid var(--line); }
-.toast { position: fixed; right: 23px; bottom: 24px; z-index: 50; display: flex; align-items: center; gap: 8px; max-width: min(420px, calc(100vw - 40px)); padding: 12px 15px; border: 1px solid #b8e9ce; border-radius: 11px; color: #087443; background: #effcf5; box-shadow: 0 14px 32px rgba(16,24,40,.13); font-size: 12px; font-weight: 600; }
+.toast { position: fixed; right: 23px; bottom: 24px; z-index: 50; display: flex; align-items: center; gap: 9px; max-width: min(500px, calc(100vw - 40px)); padding: 10px 12px 10px 15px; border: 1px solid #b8e9ce; border-radius: 13px; color: #087443; background: #effcf5; box-shadow: 0 14px 32px rgba(16,24,40,.13); font-size: 12px; font-weight: 600; }
+.toast-message { flex: 1; }
+.toast-undo-button { flex: none; min-height: 34px; padding: 6px 11px; border: 1px solid #a5dfbd; border-radius: 9px; color: #087443; background: #fff; font-size: 11px; font-weight: 700; transition: transform .18s ease, background-color .18s ease, border-color .18s ease; }
+.toast-undo-button:hover:not(:disabled) { border-color: #54c38b; background: #e8fbf0; }
+.toast-undo-button:disabled { opacity: .7; }
 .mobile-nav { display: none; }
 
 .active-view { min-width: 0; }
@@ -341,7 +346,7 @@ button:focus-visible, [role="button"]:focus-visible, input:focus-visible, select
 .installment-schedule-row:hover:not(.installment-schedule-head) { background: #f8fbff; }
 .installment-schedule-head { min-height: 36px; color: #8998ac; background: #f8faff; font-size: 10px; font-weight: 700; }
 .installment-schedule-row strong { color: #293a56; font-size: 11px; }
-.installment-schedule-row.paid { background: #f2fbf6; }
+.installment-schedule-row.paid { background: #f2fbf6; transition: background .24s ease, box-shadow .24s ease; }
 .installment-schedule-row.paid strong { color: #13865b; }
 .payment-toggle { display: inline-flex; align-items: center; gap: 7px; min-height: 32px; padding: 5px 9px; border: 1px solid #e5ebf3; border-radius: 999px; color: #64748b; background: #fff; font-size: 10px; font-weight: 600; transition: transform .16s ease, border-color .18s ease, color .18s ease, background .18s ease; }
 .payment-toggle:hover:not(:disabled) { border-color: #a9e0c4; color: #087443; background: #f4fcf7; }
@@ -549,7 +554,7 @@ button:focus-visible, [role="button"]:focus-visible, input:focus-visible, select
   .form-two-col { grid-template-columns: 1fr; gap: 12px; }
   .modal-footer { padding-bottom: max(17px, env(safe-area-inset-bottom)); }
   .modal-footer .secondary-button, .modal-footer .primary-button { flex: 1; min-height: 46px; }
-  .toast { right: 16px; bottom: calc(88px + env(safe-area-inset-bottom)); left: 16px; justify-content: center; max-width: none; text-align: center; }
+  .toast { right: 16px; bottom: calc(88px + env(safe-area-inset-bottom)); left: 16px; justify-content: center; max-width: none; text-align: left; }
   .connection-dialog { width: 100%; max-height: calc(100svh - env(safe-area-inset-top)); border-radius: 22px 22px 0 0; }
   .connection-dialog-body { padding: 17px; }
   .connection-footer { padding-bottom: max(17px, env(safe-area-inset-bottom)); }
@@ -726,7 +731,10 @@ button:focus-visible, [role="button"]:focus-visible, input:focus-visible, select
   .installment-bank-choice.selected { animation: choice-highlight .28s var(--motion-spring) both; }
   .installment-bank-choice .bank-choice-check { transition: transform .2s var(--motion-spring), color .16s ease, background-color .16s ease; }
   .installment-bank-choice.selected .bank-choice-check { animation: selected-check-pop .26s var(--motion-spring) both; }
-  .payment-toggle.is-paid .payment-check { animation: selected-check-pop .3s var(--motion-spring) both; }
+  .payment-toggle.paid-confirming .payment-check { animation: selected-check-pop .3s var(--motion-spring) both; }
+  .installment-schedule-row.paid-confirming { animation: installment-paid-confirmation .66s ease-out both; }
+  .installment-schedule-row.paid-confirming .payment-toggle { animation: paid-toggle-confirmation .44s var(--motion-spring) both; }
+  .ocr-progress > span::after { animation: ocr-progress-glint 1.25s ease-in-out infinite; }
   button[aria-expanded="true"] .installment-expand, button[aria-pressed="true"] .payment-check { transition: transform .22s var(--motion-spring), background-color .18s ease; }
 
   .review-form input, .review-form select, .review-form textarea,
@@ -755,6 +763,22 @@ button:focus-visible, [role="button"]:focus-visible, input:focus-visible, select
   0% { opacity: 0; transform: translateY(14px) scale(.96); }
   72% { opacity: 1; transform: translateY(-2px) scale(1.01); }
   100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes ocr-progress-glint {
+  from { transform: translateX(0); }
+  to { transform: translateX(470%); }
+}
+
+@keyframes installment-paid-confirmation {
+  0% { background-color: #d8f8e6; box-shadow: inset 3px 0 0 #23ad75; }
+  100% { background-color: #f2fbf6; box-shadow: inset 0 0 0 transparent; }
+}
+
+@keyframes paid-toggle-confirmation {
+  0% { transform: scale(.96); }
+  65% { transform: scale(1.035); }
+  100% { transform: scale(1); }
 }
 
 @keyframes success-check-pop {

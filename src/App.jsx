@@ -29,12 +29,15 @@ import {
   getGoogleStatus,
   listTransactions,
   removeTransaction as removeGoogleTransaction,
+  restoreTransaction as restoreGoogleTransaction,
   restoreHiddenTransactions as restoreGoogleHiddenTransactions,
   getEvidencePreview,
   listInstallments as listGoogleInstallments,
   listSubscriptions as listGoogleSubscriptions,
   removeInstallment as removeGoogleInstallment,
+  restoreInstallment as restoreGoogleInstallment,
   removeSubscription as removeGoogleSubscription,
+  restoreSubscription as restoreGoogleSubscription,
   saveInstallment as saveGoogleInstallment,
   saveSubscription as saveGoogleSubscription,
   setInstallmentPayment as setGoogleInstallmentPayment,
@@ -140,9 +143,12 @@ function App() {
   const [subscriptionSync, setSubscriptionSync] = useState({ ready: false, error: "กำลังตรวจการเชื่อมต่อ" });
   const [savingInstallment, setSavingInstallment] = useState(false);
   const [updatingPayment, setUpdatingPayment] = useState("");
+  const [paidCelebrationKey, setPaidCelebrationKey] = useState("");
   const [hiddenTransactions, setHiddenTransactions] = useState([]);
   const [draft, setDraft] = useState(null);
-  const [toast, setToast] = useState("");
+  const [toast, setToastValue] = useState("");
+  const [toastAction, setToastAction] = useState(null);
+  const [toastActionBusy, setToastActionBusy] = useState(false);
   const [saving, setSaving] = useState(false);
   const [runtime, setRuntime] = useState({ status: "checking", mode: null });
   const [connection, setConnection] = useState({ mode: "local", state: "demo" });
@@ -152,6 +158,11 @@ function App() {
   const [selectedSubscription, setSelectedSubscription] = useState(null);
   const [loginError, setLoginError] = useState("");
   const fileInputRef = useRef(null);
+
+  function setToast(message) {
+    setToastAction(null);
+    setToastValue(message);
+  }
 
   useLayoutEffect(() => {
     window.scrollTo(0, 0);
@@ -245,9 +256,14 @@ function App() {
 
   useEffect(() => {
     if (!toast) return undefined;
-    const timeout = window.setTimeout(() => setToast(""), 3600);
+    if (toastActionBusy) return undefined;
+    const hasAction = toastAction?.message === toast;
+    const timeout = window.setTimeout(() => {
+      setToastValue("");
+      setToastAction(null);
+    }, hasAction ? 6000 : 3600);
     return () => window.clearTimeout(timeout);
-  }, [toast]);
+  }, [toast, toastAction, toastActionBusy]);
 
   const summary = useMemo(() => getSummary(transactions, selectedMonth), [transactions, selectedMonth]);
   const monthChoices = useMemo(
@@ -411,6 +427,13 @@ function App() {
       return;
     }
     const originalPlans = installments;
+    const celebrationKey = `${planId}:${installmentNumber}`;
+    if (paid) {
+      setPaidCelebrationKey(celebrationKey);
+      window.setTimeout(() => setPaidCelebrationKey((current) => current === celebrationKey ? "" : current), 900);
+    } else {
+      setPaidCelebrationKey("");
+    }
     setUpdatingPayment(key);
     setInstallments((current) => current.map((plan) => plan.id !== planId ? plan : {
       ...plan,
@@ -625,7 +648,6 @@ function App() {
           ...current.filter((item) => item.id !== id),
         ]);
       }
-      setToast(runtime.mode === "google" ? "ซ่อนรายการจากแอปแล้ว โดยเก็บแถวไว้ในชีต" : "ลบรายการทดลองออกจากเครื่องแล้ว");
       return true;
     } catch (error) {
       setToast(error.message || "ลบรายการไม่สำเร็จ");
@@ -637,27 +659,70 @@ function App() {
     if (!deleteTarget || deleteBusy) return;
     setDeleteBusy(true);
     let succeeded = false;
+    const target = deleteTarget;
+    const deletedItem = target.type === "transaction"
+      ? transactions.find((item) => item.id === target.id) || hiddenTransactions.find((item) => item.id === target.id)
+      : target.type === "installment"
+        ? installments.find((item) => item.id === target.id)
+        : subscriptions.find((item) => item.id === target.id);
     try {
-      if (deleteTarget.type === "transaction") {
-        succeeded = await removeTransaction(deleteTarget.id);
-        if (succeeded && draft?.transactionId === deleteTarget.id) setDraft(null);
-      } else if (deleteTarget.type === "installment") {
-        if (runtime.mode === "google") await removeGoogleInstallment(deleteTarget.id);
-        setInstallments((current) => current.filter((item) => item.id !== deleteTarget.id));
-        setToast(runtime.mode === "google" ? "ลบแผนผ่อนออกจากรายการแล้ว" : "ลบแผนผ่อนออกจากอุปกรณ์นี้แล้ว");
+      if (target.type === "transaction") {
+        succeeded = await removeTransaction(target.id);
+        if (succeeded && draft?.transactionId === target.id) setDraft(null);
+      } else if (target.type === "installment") {
+        if (runtime.mode === "google") await removeGoogleInstallment(target.id);
+        setInstallments((current) => current.filter((item) => item.id !== target.id));
         succeeded = true;
-      } else if (deleteTarget.type === "subscription") {
-        if (runtime.mode === "google") await removeGoogleSubscription(deleteTarget.id);
-        setSubscriptions((current) => current.filter((item) => item.id !== deleteTarget.id));
+      } else if (target.type === "subscription") {
+        if (runtime.mode === "google") await removeGoogleSubscription(target.id);
+        setSubscriptions((current) => current.filter((item) => item.id !== target.id));
         setSelectedSubscription(null);
-        setToast(runtime.mode === "google" ? "ลบบริการออกจากรายการแล้ว" : "ลบบริการออกจากอุปกรณ์นี้แล้ว");
         succeeded = true;
+      }
+      if (succeeded) {
+        const message = target.type === "transaction"
+          ? runtime.mode === "google" ? "ซ่อนรายการจากแอปแล้ว · เก็บข้อมูลไว้ในชีต" : "ลบรายการทดลองออกจากเครื่องแล้ว"
+          : target.type === "installment"
+            ? runtime.mode === "google" ? "ซ่อนแผนผ่อนแล้ว" : "ลบแผนผ่อนออกจากอุปกรณ์นี้แล้ว"
+            : runtime.mode === "google" ? "ซ่อนบริการแล้ว" : "ลบบริการออกจากอุปกรณ์นี้แล้ว";
+        setToastValue(message);
+        setToastAction(deletedItem ? { type: target.type, item: deletedItem, message } : null);
       }
     } catch (error) {
       setToast(error.message || "ลบรายการไม่สำเร็จ");
     } finally {
       setDeleteBusy(false);
       if (succeeded) setDeleteTarget(null);
+    }
+  }
+
+  async function undoLastDelete() {
+    const action = toastAction;
+    if (!action || toastActionBusy) return;
+    setToastActionBusy(true);
+    try {
+      if (runtime.mode === "google") {
+        if (action.type === "transaction") await restoreGoogleTransaction(action.item.id);
+        else if (action.type === "installment") await restoreGoogleInstallment(action.item.id);
+        else if (action.type === "subscription") await restoreGoogleSubscription(action.item.id);
+      }
+
+      if (action.type === "transaction") {
+        setTransactions((current) => current.some((item) => item.id === action.item.id) ? current : [action.item, ...current]);
+        setHiddenTransactions((current) => current.filter((item) => item.id !== action.item.id));
+        if (action.item.budgetMonth) setSelectedMonth(action.item.budgetMonth);
+      } else if (action.type === "installment") {
+        setInstallments((current) => current.some((item) => item.id === action.item.id) ? current : [action.item, ...current]);
+      } else if (action.type === "subscription") {
+        setSubscriptions((current) => current.some((item) => item.id === action.item.id) ? current : [action.item, ...current]);
+      }
+
+      setToastAction(null);
+      setToast("คืนรายการกลับมาแล้ว");
+    } catch (error) {
+      setToast(error.message || "คืนรายการไม่สำเร็จ ลองอีกครั้งได้ครับ");
+    } finally {
+      setToastActionBusy(false);
     }
   }
 
@@ -740,6 +805,7 @@ function App() {
               onRetrySync={retryInstallmentSync}
               saving={savingInstallment}
               updatingPayment={updatingPayment}
+              paidCelebrationKey={paidCelebrationKey}
               onCreate={createInstallment}
               onTogglePayment={toggleInstallmentPayment}
               onDelete={(plan) => setDeleteTarget({ type: "installment", id: plan.id, name: plan.name })}
@@ -782,7 +848,7 @@ function App() {
       {selectedSubscription && <SubscriptionDetailModal subscription={selectedSubscription} selectedMonth={selectedMonth} onClose={() => setSelectedSubscription(null)} onDelete={() => setDeleteTarget({ type: "subscription", id: selectedSubscription.id, name: selectedSubscription.name })} />}
       {deleteTarget && <DeleteConfirmDialog target={deleteTarget} storageMode={runtime.mode} busy={deleteBusy} onCancel={() => !deleteBusy && setDeleteTarget(null)} onConfirm={confirmDeleteTarget} />}
       {showSettings && <ConnectionDialog connection={connection} onClose={() => setShowSettings(false)} onLogout={handleLogout} onRetry={retryGoogleConnection} />}
-      {toast && <div className="toast"><Icon name="check" size={17} />{toast}</div>}
+      {toast && <div className="toast" role="status" aria-live="polite"><Icon name="check" size={17} /><span className="toast-message">{toast}</span>{toastAction?.message === toast && <button className="toast-undo-button" type="button" onClick={undoLastDelete} disabled={toastActionBusy}>{toastActionBusy ? "กำลังคืน…" : "เลิกทำ"}</button>}</div>}
     </div>
   );
 }
@@ -1068,7 +1134,7 @@ function HistoryView({ transactions, selectedMonth, connection, onSelectTransact
   );
 }
 
-function InstallmentsView({ plans, month, onMonthChange, storageMode, syncReady, syncError, onRetrySync, saving, updatingPayment, onCreate, onTogglePayment, onDelete, onSettings }) {
+function InstallmentsView({ plans, month, onMonthChange, storageMode, syncReady, syncError, onRetrySync, saving, updatingPayment, paidCelebrationKey, onCreate, onTogglePayment, onDelete, onSettings }) {
   const [formOpen, setFormOpen] = useState(false);
   const summary = summarizeInstallments(plans, month);
   const duePlans = [...new Map(summary.dueThisMonth.map(({ plan }) => [plan.id, plan])).values()];
@@ -1131,6 +1197,7 @@ function InstallmentsView({ plans, month, onMonthChange, storageMode, syncReady,
               plan={plan}
               index={index}
               updatingPayment={updatingPayment}
+              paidCelebrationKey={paidCelebrationKey}
               onTogglePayment={onTogglePayment}
               canDelete={canSave}
               onDelete={() => onDelete(plan)}
@@ -1154,7 +1221,7 @@ function InstallmentsView({ plans, month, onMonthChange, storageMode, syncReady,
   );
 }
 
-function InstallmentPlanCard({ plan, index, updatingPayment, onTogglePayment, canDelete, onDelete }) {
+function InstallmentPlanCard({ plan, index, updatingPayment, paidCelebrationKey, onTogglePayment, canDelete, onDelete }) {
   const [expanded, setExpanded] = useState(false);
   const [scheduleExpanded, setScheduleExpanded] = useState(false);
   const bank = installmentBanks.find((item) => item.value === plan.bank) || { label: plan.bank || "ไม่ระบุ", short: "?", tone: "loan" };
@@ -1208,12 +1275,12 @@ function InstallmentPlanCard({ plan, index, updatingPayment, onTogglePayment, ca
                   const key = `${plan.id}:${payment.installmentNumber}`;
                   const isUpdating = updatingPayment === key;
                   return (
-                    <div className={`installment-schedule-row ${payment.paid ? "paid" : ""}`} role="row" key={payment.installmentNumber}>
+                    <div className={`installment-schedule-row ${payment.paid ? "paid" : ""} ${paidCelebrationKey === key ? "paid-confirming" : ""}`} role="row" key={payment.installmentNumber}>
                       <span data-label="งวด" role="cell">งวดที่ {payment.installmentNumber}</span>
                       <span data-label="เดือน" role="cell">{installmentMonthLabel(payment.month)}</span>
                       <strong data-label="จำนวนเงิน" role="cell">฿ {formatNumber(payment.amount)}</strong>
                       <span data-label="สถานะ" role="cell">
-                        <button className={`payment-toggle ${payment.paid ? "is-paid" : ""}`} type="button" disabled={Boolean(updatingPayment)} aria-pressed={payment.paid} onClick={() => onTogglePayment(plan.id, payment.installmentNumber, !payment.paid)}>
+                        <button className={`payment-toggle ${payment.paid ? "is-paid" : ""} ${paidCelebrationKey === key ? "paid-confirming" : ""}`} type="button" disabled={Boolean(updatingPayment)} aria-pressed={payment.paid} onClick={() => onTogglePayment(plan.id, payment.installmentNumber, !payment.paid)}>
                           <span className="payment-check"><Icon name={payment.paid ? "check" : "clock"} size={13} /></span>
                           {isUpdating ? "กำลังบันทึก…" : payment.paid ? "ชำระแล้ว" : "ทำเครื่องหมายว่าจ่ายแล้ว"}
                         </button>
