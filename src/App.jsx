@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "./icons";
 import {
   categoryOptions,
@@ -95,6 +95,10 @@ function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [loginError, setLoginError] = useState("");
   const fileInputRef = useRef(null);
+
+  useLayoutEffect(() => {
+    window.scrollTo(0, 0);
+  }, [activeView]);
 
   useEffect(() => {
     const previewUrl = draft?.previewUrl;
@@ -557,6 +561,7 @@ function App() {
           onSettings={() => setShowSettings(true)}
         />
         <main className="content-area">
+          <div className="active-view" key={activeView}>
           {activeView === "overview" && (
             <Overview
               summary={summary}
@@ -596,6 +601,7 @@ function App() {
             />
           )}
           {activeView === "coach" && <CoachView summary={summary} selectedMonth={selectedMonth} />}
+          </div>
         </main>
       </div>
       <MobileNav activeView={activeView} onNavigate={setActiveView} />
@@ -714,7 +720,7 @@ function Topbar({ activeView, selectedMonth, monthChoices, connection, onMonthCh
   const monthIndex = monthChoices.findIndex((item) => item.value === selectedMonth);
   const connected = connection.mode === "google" && connection.state === "connected";
   return (
-    <header className="topbar">
+    <header className={`topbar topbar-${activeView}`}>
       <div className="mobile-brand"><div className="brand-mark"><Icon name="wallet" size={18} /></div><strong>การเงินส่วนตัว</strong></div>
       <div className="topbar-title"><h1>{title}</h1><span>อัปเดตล่าสุดเมื่อสักครู่</span></div>
       <div className="topbar-actions">
