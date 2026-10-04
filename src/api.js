@@ -49,6 +49,29 @@ export async function listTransactions() {
   return result.transactions;
 }
 
+export async function getEvidencePreview(transactionId, signal) {
+  const response = await fetch(`/api/evidence?id=${encodeURIComponent(transactionId)}`, {
+    credentials: "same-origin",
+    cache: "no-store",
+    signal,
+    headers: { Accept: "image/*, application/pdf" },
+  });
+  if (!response.ok) {
+    let message = "เปิดภาพหลักฐานไม่สำเร็จ";
+    try {
+      const result = await response.json();
+      message = result.error || message;
+    } catch { /* Keep the short fallback message for non-JSON errors. */ }
+    throw new Error(message);
+  }
+
+  const blob = await response.blob();
+  if (!blob.type.startsWith("image/") && blob.type !== "application/pdf") {
+    throw new Error("ไฟล์นี้ไม่สามารถแสดงตัวอย่างได้");
+  }
+  return { url: URL.createObjectURL(blob), mimeType: blob.type };
+}
+
 function fileToBase64(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -97,4 +120,28 @@ export async function restoreHiddenTransactions(budgetMonth) {
     throw new Error("เซิร์ฟเวอร์ยืนยันการคืนรายการไม่สำเร็จ");
   }
   return result;
+}
+
+export async function listInstallments() {
+  const result = await requestJson("/api/installments");
+  if (!Array.isArray(result?.installments)) throw new Error("รูปแบบข้อมูลผ่อนชำระจาก Google Sheets ไม่ถูกต้อง");
+  return result.installments;
+}
+
+export async function saveInstallment(plan) {
+  const result = await requestJson("/api/installments", {
+    method: "POST",
+    body: JSON.stringify({ plan }),
+  });
+  if (!result?.installment) throw new Error("Google Sheets ไม่ได้ยืนยันการบันทึกแผนผ่อน");
+  return result.installment;
+}
+
+export async function setInstallmentPayment({ id, installmentNumber, paid }) {
+  const result = await requestJson("/api/installments", {
+    method: "PATCH",
+    body: JSON.stringify({ id, installmentNumber, paid }),
+  });
+  if (!result?.installment) throw new Error("Google Sheets ไม่ได้ยืนยันสถานะการชำระ");
+  return result.installment;
 }
