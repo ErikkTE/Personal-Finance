@@ -1,3 +1,6 @@
+Warning: truncated output (original token count: 13713)
+Total output lines: 602
+
 @import url("https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@400;500;600;700;800&display=swap");
 
 :root {
@@ -262,47 +265,8 @@ button:focus-visible, [role="button"]:focus-visible, input:focus-visible, select
 .installment-page { animation: installment-page-in .36s cubic-bezier(.2,.75,.25,1) both; }
 .installment-kicker { display: inline-flex; align-items: center; gap: 6px; margin-bottom: 8px; color: var(--blue-deep); font-size: 11px; font-weight: 700; }
 .installment-add-button { min-height: 46px; white-space: nowrap; transition: transform .18s ease, box-shadow .18s ease, background .18s ease; }
-.installment-add-button:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 11px 22px rgba(57,135,246,.23); }
-.installment-add-button:active:not(:disabled), .payment-toggle:active:not(:disabled), .installment-bank-choice:active:not(:disabled) { transform: scale(.97); }
-.installment-sync-notice { display: flex; align-items: center; gap: 12px; padding: 14px 16px; border: 1px solid #f0d9a8; border-radius: 15px; color: #795719; background: #fff9ed; }
-.installment-sync-notice.local { border-color: #d8e7fb; color: #385c89; background: #f2f7ff; }
-.installment-sync-icon { width: 34px; height: 34px; display: grid; place-items: center; flex: 0 0 auto; border-radius: 11px; color: inherit; background: rgba(255,255,255,.72); }
-.installment-sync-notice > div { min-width: 0; display: grid; gap: 3px; flex: 1; }
-.installment-sync-notice strong { font-size: 12px; }
-.installment-sync-notice span:not(.installment-sync-icon) { font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
-.installment-sync-notice .secondary-button { min-height: 36px; padding: 7px 11px; color: inherit; white-space: nowrap; }
-.installment-month-panel { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 15px 18px; }
-.installment-month-heading { display: flex; align-items: center; gap: 11px; }
-.installment-month-icon { width: 39px; height: 39px; display: grid; place-items: center; border-radius: 13px; color: #347ce1; background: #edf5ff; }
-.installment-month-heading small, .installment-month-heading strong { display: block; }
-.installment-month-heading small { color: var(--muted); font-size: 10px; }
-.installment-month-heading strong { margin-top: 2px; font-size: 16px; }
-.installment-month-controls { display: flex; gap: 6px; }
-.installment-month-controls .icon-button { width: 39px; height: 39px; transition: transform .18s ease, background .18s ease; }
-.installment-month-controls .icon-button:active { transform: scale(.93); }
-.installment-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-.installment-plan-list { display: grid; gap: 14px; }
-.installment-plan-card { overflow: hidden; animation: installment-page-in .38s cubic-bezier(.2,.75,.25,1) both; animation-delay: calc(var(--plan-index, 0) * 35ms); transition: box-shadow .22s ease, border-color .22s ease; }
-.installment-plan-card:hover { border-color: #d9e7fa; box-shadow: var(--shadow-hover); }
-.installment-plan-head { display: flex; align-items: center; gap: 14px; padding: 19px 20px 14px; }
-.installment-bank-mark { min-width: 45px; height: 42px; display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; padding: 0 7px; border-radius: 13px; color: #fff; font-size: 11px; font-weight: 800; letter-spacing: -.04em; box-shadow: inset 0 1px 0 rgba(255,255,255,.26); }
-.bank-kasikorn { background: linear-gradient(145deg, #26a56d, #087a4a); }
-.bank-scb { background: linear-gradient(145deg, #9a65c7, #684093); }
-.bank-uob { background: linear-gradient(145deg, #df6b72, #b8323c); }
-.installment-plan-title { min-width: 0; flex: 1; }
-.installment-plan-bank { display: block; color: var(--muted); font-size: 10px; }
-.installment-plan-title h3 { margin: 3px 0 0; overflow: hidden; color: var(--navy); font-size: 16px; letter-spacing: -.025em; text-overflow: ellipsis; white-space: nowrap; }
-.installment-plan-price { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; }
-.installment-plan-amount { display: grid; justify-items: end; gap: 2px; white-space: nowrap; }
-.installment-plan-amount strong { color: var(--navy); font-size: 16px; }
-.installment-plan-amount span { color: var(--muted); font-size: 10px; }
-.installment-expand { width: 35px; height: 35px; flex: 0 0 auto; transition: transform .2s ease, background .2s ease; }
-.installment-expand.is-expanded { transform: rotate(90deg); color: var(--blue-deep); background: var(--blue-soft); }
-.installment-progress-row { display: flex; align-items: center; gap: 12px; padding: 0 20px 16px 79px; color: var(--muted); font-size: 10px; }
-.installment-progress-track { height: 6px; overflow: hidden; flex: 1; border-radius: 999px; background: #edf1f7; }
-.installment-progress-track span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #46b88a, #28a775); transition: width .45s cubic-bezier(.2,.75,.25,1); }
-.installment-progress-row > strong { color: #475467; font-size: 10px; white-space: nowrap; }
-.installment-schedule-wrap { padding: 0 20px 18px; animation: installment-page-in .26s ease both; }
+.installment-add-button:hover:not(:disable…1713 tokens truncated…deg); }
+.installment-schedule-wrap { padding: 0 0 2px; animation: installment-page-in .26s ease both; }
 .installment-schedule-title { display: flex; align-items: end; justify-content: space-between; gap: 10px; padding: 12px 0 9px; border-top: 1px solid #edf1f6; }
 .installment-schedule-title h4 { margin: 0; font-size: 12px; }
 .installment-schedule-title span { display: block; margin-top: 3px; color: var(--faint); font-size: 10px; }
@@ -332,9 +296,14 @@ button:focus-visible, [role="button"]:focus-visible, input:focus-visible, select
 .installment-fields label { gap: 6px; }
 .installment-fields input { min-height: 43px; border-radius: 10px; font-size: 14px; }
 .installment-field-hint { color: var(--faint); font-size: 9px; font-weight: 400; }
+.installment-start-month { min-height: 51px; display: flex; align-items: center; gap: 10px; padding: 8px 11px; border: 1px solid #e1eaf5; border-radius: 11px; background: #f7faff; }
+.installment-start-icon { width: 31px; height: 31px; display: grid; place-items: center; flex: 0 0 auto; border-radius: 9px; color: var(--blue-deep); background: #e7f0ff; }
+.installment-start-month > span:last-child { display: grid; gap: 2px; }
+.installment-start-month small { color: var(--muted); font-size: 9px; }
+.installment-start-month strong { color: var(--navy); font-size: 12px; }
 .installment-bank-picker { min-width: 0; margin: 0; padding: 0; border: 0; }
 .installment-bank-picker legend { margin-bottom: 7px; color: #475467; font-size: 11px; font-weight: 600; }
-.installment-bank-picker > div { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
+.installment-bank-picker > div { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; }
 .installment-bank-choice { position: relative; min-width: 0; min-height: 83px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 9px 5px; border: 1px solid #e2e9f2; border-radius: 12px; color: #475467; background: #fff; font-size: 10px; transition: transform .16s ease, border-color .18s ease, background .18s ease, box-shadow .18s ease; }
 .installment-bank-choice .installment-bank-mark { min-width: 42px; height: 34px; border-radius: 10px; }
 .installment-bank-choice.selected { border-color: #8bb8f5; color: #245fae; background: #f4f9ff; box-shadow: 0 0 0 3px #edf5ff; }
@@ -528,24 +497,26 @@ button:focus-visible, [role="button"]:focus-visible, input:focus-visible, select
   .installment-sync-icon { width: 30px; height: 30px; }
   .installment-sync-notice > div { width: calc(100% - 42px); flex: 1 1 calc(100% - 42px); }
   .installment-sync-notice .secondary-button { width: 100%; margin-left: 39px; }
-  .installment-month-panel { padding: 12px; }
+  .installment-month-panel { gap: 10px; padding: 12px; }
   .installment-month-heading strong { font-size: 14px; }
   .installment-month-icon, .installment-month-controls .icon-button { width: 36px; height: 36px; }
-  .installment-metrics .metric-card { min-height: 128px; }
-  .installment-metrics .metric-top { align-items: flex-start; }
-  .installment-metrics .metric-value { font-size: clamp(16px, 4.6vw, 20px); }
-  .installment-plan-head { gap: 9px; padding: 14px 12px 11px; }
-  .installment-plan-head > .installment-bank-mark { min-width: 40px; height: 38px; font-size: 10px; }
-  .installment-plan-title h3 { font-size: 13px; }
+  .installment-month-summary { gap: 10px; padding-top: 10px; }
+  .installment-month-summary > strong { font-size: 20px; }
+  .installment-month-summary small { font-size: 11px; }
+  .installment-plan-head { grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; padding: 13px 12px; }
+  .installment-plan-head > .installment-bank-mark { grid-row: span 2; min-width: 40px; height: 38px; font-size: 10px; }
+  .installment-plan-title { grid-column: 2; grid-row: 1; }
+  .installment-plan-name { font-size: 13px; }
   .installment-plan-bank { font-size: 9px; }
-  .installment-plan-price { font-size: 10px; }
-  .installment-plan-amount strong { font-size: 12px; }
+  .installment-plan-amount { grid-column: 2; grid-row: 2; display: flex; align-items: baseline; justify-items: start; gap: 5px; }
+  .installment-plan-amount strong { font-size: 13px; }
   .installment-plan-amount span { font-size: 9px; }
-  .installment-expand { width: 31px; height: 31px; }
-  .installment-progress-row { flex-wrap: wrap; gap: 7px 9px; padding: 0 13px 12px; }
-  .installment-progress-track { min-width: 80px; }
-  .installment-progress-row > strong { margin-left: auto; }
-  .installment-schedule-wrap { padding: 0 11px 12px; }
+  .installment-expand { grid-column: 3; grid-row: 1; width: 31px; height: 31px; align-self: start; }
+  .installment-plan-details { padding: 0 12px 12px; }
+  .installment-progress-row { gap: 8px; }
+  .installment-detail-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 12px; }
+  .installment-detail-grid .installment-detail-total { grid-column: 1 / -1; padding-left: 10px; }
+  .installment-bank-picker > div { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .installment-schedule-title { align-items: flex-start; flex-direction: column; }
   .installment-schedule-table { display: grid; gap: 7px; overflow: visible; border: 0; }
   .installment-schedule-head { display: none; }

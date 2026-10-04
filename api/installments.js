@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { callAppsScript } from "../lib/server/apps-script.js";
 import { isSameOriginRequest, requireSession, setNoStore } from "../lib/server/session.js";
 
-const BANKS = new Set(["กสิกรไทย", "SCB", "UOB"]);
+const BANKS = new Set(["กสิกรไทย", "SCB", "UOB", "สินเชื่อ"]);
 
 function validMonth(value) {
   return typeof value === "string" && /^\d{4}-(0[1-9]|1[0-2])$/.test(value);
@@ -10,6 +10,17 @@ function validMonth(value) {
 
 function money(value) {
   return Math.round(Number(value) * 100) / 100;
+}
+
+function nextInstallmentMonthInBangkok() {
+  const parts = new Intl.DateTimeFormat("en", {
+    timeZone: "Asia/Bangkok",
+    year: "numeric",
+    month: "2-digit",
+  }).formatToParts(new Date());
+  const values = Object.fromEntries(parts.map((part) => [part.type, Number(part.value)]));
+  const date = new Date(Date.UTC(values.year, values.month, 1));
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
 }
 
 function createSchedule(financedAmount, interestRate, months, startMonth) {
@@ -39,7 +50,7 @@ function normalizePlan(input) {
   const interestRate = money(input.interestRate ?? 0);
   const months = Number(input.months);
   const bank = String(input.bank || "");
-  const startMonth = String(input.startMonth || "");
+  const startMonth = nextInstallmentMonthInBangkok();
   if (!name) throw new Error("กรุณาระบุชื่อสินค้า");
   if (!Number.isFinite(price) || price <= 0 || price > 100_000_000) throw new Error("ราคาสินค้าไม่ถูกต้อง");
   if (!Number.isFinite(downPayment) || downPayment < 0 || downPayment >= price) throw new Error("เงินดาวน์ต้องไม่ติดลบและต้องน้อยกว่าราคาสินค้า");

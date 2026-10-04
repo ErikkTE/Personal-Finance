@@ -208,7 +208,7 @@ function saveInstallment_(input) {
   if (!Number.isFinite(interestRate) || interestRate < 0 || interestRate > 100 || !Number.isInteger(months) || months < 1 || months > 60) {
     throw new Error("Installment interest or term is invalid");
   }
-  if (["กสิกรไทย", "SCB", "UOB"].indexOf(bank) < 0 || !/^\d{4}-(0[1-9]|1[0-2])$/.test(startMonth) || schedule.length !== months) {
+  if (["กสิกรไทย", "SCB", "UOB", "สินเชื่อ"].indexOf(bank) < 0 || !/^\d{4}-(0[1-9]|1[0-2])$/.test(startMonth) || schedule.length !== months) {
     throw new Error("Installment bank, month or schedule is invalid");
   }
 

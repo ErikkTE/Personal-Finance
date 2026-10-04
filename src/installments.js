@@ -2,17 +2,27 @@ export const installmentBanks = [
   { value: "กสิกรไทย", label: "กสิกรไทย", short: "KBank", tone: "kasikorn" },
   { value: "SCB", label: "ไทยพาณิชย์", short: "SCB", tone: "scb" },
   { value: "UOB", label: "ยูโอบี", short: "UOB", tone: "uob" },
+  { value: "สินเชื่อ", label: "สินเชื่อ", short: "สินเชื่อ", tone: "loan" },
 ];
 
 export function currentInstallmentMonth() {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const parts = new Intl.DateTimeFormat("en", {
+    timeZone: "Asia/Bangkok",
+    year: "numeric",
+    month: "2-digit",
+  }).formatToParts(new Date());
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}`;
 }
 
 export function addMonths(month, offset) {
   const [year, monthNumber] = String(month).split("-").map(Number);
   const date = new Date(Date.UTC(year, monthNumber - 1 + offset, 1));
   return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+export function nextInstallmentMonth() {
+  return addMonths(currentInstallmentMonth(), 1);
 }
 
 export function installmentMonthLabel(month, { short = false } = {}) {
