@@ -48,12 +48,12 @@ import {
 import { readReceipt } from "./receipt-ocr";
 
 const navItems = [
-  { key: "overview", label: "ภาพรวม", icon: "grid" },
-  { key: "upload", label: "อัปโหลดสลิป", icon: "upload" },
-  { key: "history", label: "ประวัติรายการ", icon: "list" },
-  { key: "installments", label: "ผ่อนสินค้า", icon: "card" },
-  { key: "subscriptions", label: "สมัครบริการ", icon: "calendar" },
-  { key: "coach", label: "คำแนะนำ AI", icon: "sparkles" },
+  { key: "overview", label: "ภาพรวม", shortLabel: "ภาพรวม", icon: "grid" },
+  { key: "upload", label: "อัปโหลดสลิป", shortLabel: "อัปโหลด", icon: "upload" },
+  { key: "history", label: "ประวัติรายการ", shortLabel: "ประวัติ", icon: "list" },
+  { key: "installments", label: "ผ่อนสินค้า", shortLabel: "ผ่อนสินค้า", icon: "card" },
+  { key: "subscriptions", label: "สมัครบริการ", shortLabel: "บริการ", icon: "calendar" },
+  { key: "coach", label: "แนวทางการเงิน", shortLabel: "แนวทาง", icon: "sparkles" },
 ];
 
 const subscriptionCategories = ["บันเทิง", "ทำงาน", "พื้นที่เก็บข้อมูล", "สุขภาพ", "การศึกษา", "อื่นๆ"];
@@ -806,7 +806,7 @@ function App() {
               onSelectTransaction={openTransaction}
             />
           )}
-          {activeView === "upload" && <UploadView onUpload={openUpload} transactions={transactions} onReview={openTransaction} />}
+          {activeView === "upload" && <UploadView onUpload={openUpload} transactions={transactions} onReview={openTransaction} storageMode={runtime.mode} />}
           {activeView === "history" && (
             <HistoryView
               transactions={transactions}
@@ -936,7 +936,8 @@ function Sidebar({ activeView, connection, onNavigate, onSettings }) {
             onClick={() => onNavigate(item.key)}
           >
             <Icon name={item.icon} size={19} />
-            <span>{item.label}</span>
+            <span className="nav-label-full">{item.label}</span>
+            <span className="nav-label-compact">{item.shortLabel}</span>
           </button>
         ))}
       </nav>
@@ -948,7 +949,7 @@ function Sidebar({ activeView, connection, onNavigate, onSettings }) {
             <span>{connection.mode === "google" ? "เชื่อมต่อแล้ว" : "ข้อมูลเก็บในเครื่องนี้"}</span>
           </span>
         </button>
-        <button className="nav-item muted" type="button" title="ตั้งค่าและการเชื่อมต่อ" aria-label="ตั้งค่าและการเชื่อมต่อ" onClick={onSettings}><Icon name="settings" size={19} /><span>ตั้งค่าและการเชื่อมต่อ</span></button>
+        <button className="nav-item muted" type="button" title="ตั้งค่าและการเชื่อมต่อ" aria-label="ตั้งค่าและการเชื่อมต่อ" onClick={onSettings}><Icon name="settings" size={19} /><span className="nav-label-full">ตั้งค่าและการเชื่อมต่อ</span><span className="nav-label-compact">ตั้งค่า</span></button>
       </div>
     </aside>
   );
@@ -956,38 +957,93 @@ function Sidebar({ activeView, connection, onNavigate, onSettings }) {
 
 function MobileNav({ activeView, onNavigate, onUpload }) {
   const [moreOpen, setMoreOpen] = useState(false);
+  const [quickAddOpen, setQuickAddOpen] = useState(false);
+  const quickAddButtonRef = useRef(null);
+  const firstQuickAddActionRef = useRef(null);
   const primaryItems = navItems.filter((item) => ["overview", "history", "installments"].includes(item.key));
   const moreItems = navItems.filter((item) => ["subscriptions", "upload", "coach"].includes(item.key));
   const moreActive = moreItems.some((item) => item.key === activeView);
 
+  useEffect(() => {
+    if (quickAddOpen) firstQuickAddActionRef.current?.focus();
+  }, [quickAddOpen]);
+
+  function closeQuickAdd() {
+    setQuickAddOpen(false);
+    window.requestAnimationFrame(() => quickAddButtonRef.current?.focus());
+  }
+
+  function keepQuickAddFocusInside(event) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeQuickAdd();
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const buttons = [...(event.currentTarget.querySelectorAll("button:not(:disabled)") || [])];
+    const first = buttons[0];
+    const last = buttons.at(-1);
+    if (event.shiftKey && first && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && last && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
   return (
-    <nav className="mobile-nav" aria-label="เมนูมือถือ">
-      {primaryItems.slice(0, 2).map((item) => (
-        <button key={item.key} className={activeView === item.key ? "active" : ""} type="button" onClick={() => onNavigate(item.key)} aria-label={item.label} aria-current={activeView === item.key ? "page" : undefined}>
-          <Icon name={item.icon} size={20} />
-          <span>{({ overview: "ภาพรวม", history: "รายการ" })[item.key]}</span>
+    <>
+      <nav className="mobile-nav" aria-label="เมนูมือถือ">
+        {primaryItems.slice(0, 2).map((item) => (
+          <button key={item.key} className={activeView === item.key ? "active" : ""} type="button" onClick={() => onNavigate(item.key)} aria-label={item.label} aria-current={activeView === item.key ? "page" : undefined}>
+            <Icon name={item.icon} size={20} />
+            <span>{({ overview: "ภาพรวม", history: "รายการ" })[item.key]}</span>
+          </button>
+        ))}
+        <button ref={quickAddButtonRef} className="mobile-add-button" type="button" onClick={() => { setMoreOpen(false); setQuickAddOpen(true); }} aria-label="เพิ่มรายการหรือจัดการรายการประจำ" aria-haspopup="dialog" aria-expanded={quickAddOpen}>
+          <Icon name="plus" size={23} /><span>เพิ่ม</span>
         </button>
-      ))}
-      <button className="mobile-add-button" type="button" onClick={onUpload} aria-label="เพิ่มรายการจากสลิป"><Icon name="plus" size={23} /><span>เพิ่ม</span></button>
-      <button className={activeView === "installments" ? "active" : ""} type="button" onClick={() => onNavigate("installments")} aria-label="รายการผ่อนสินค้า" aria-current={activeView === "installments" ? "page" : undefined}>
-        <Icon name="card" size={20} /><span>ผ่อน</span>
-      </button>
-      <div className="mobile-more-wrap">
-        <button className={moreActive ? "active" : ""} type="button" aria-expanded={moreOpen} aria-controls="mobile-more-menu" onClick={() => setMoreOpen((open) => !open)} aria-label="เมนูเพิ่มเติม">
-          <Icon name="more" size={20} /><span>เพิ่มเติม</span>
+        <button className={activeView === "installments" ? "active" : ""} type="button" onClick={() => onNavigate("installments")} aria-label="รายการผ่อนสินค้า" aria-current={activeView === "installments" ? "page" : undefined}>
+          <Icon name="card" size={20} /><span>ผ่อน</span>
         </button>
-        {moreOpen && <>
-          <button className="mobile-more-backdrop" type="button" aria-label="ปิดเมนูเพิ่มเติม" onClick={() => setMoreOpen(false)} />
-          <div className="mobile-more-menu" id="mobile-more-menu" role="menu" aria-label="หน้าจอเพิ่มเติม">
-            {moreItems.map((item) => (
-              <button key={item.key} type="button" role="menuitem" className={activeView === item.key ? "active" : ""} onClick={() => { setMoreOpen(false); onNavigate(item.key); }}>
-                <Icon name={item.icon} size={18} /><span>{item.label}</span><Icon name="chevronRight" size={16} />
-              </button>
-            ))}
+        <div className="mobile-more-wrap">
+          <button className={moreActive ? "active" : ""} type="button" aria-expanded={moreOpen} aria-controls="mobile-more-menu" onClick={() => setMoreOpen((open) => !open)} aria-label="เมนูเพิ่มเติม">
+            <Icon name="more" size={20} /><span>เพิ่มเติม</span>
+          </button>
+          {moreOpen && <>
+            <button className="mobile-more-backdrop" type="button" aria-label="ปิดเมนูเพิ่มเติม" onClick={() => setMoreOpen(false)} />
+            <div className="mobile-more-menu" id="mobile-more-menu" role="menu" aria-label="หน้าจอเพิ่มเติม">
+              {moreItems.map((item) => (
+                <button key={item.key} type="button" role="menuitem" className={activeView === item.key ? "active" : ""} onClick={() => { setMoreOpen(false); onNavigate(item.key); }}>
+                  <Icon name={item.icon} size={18} /><span>{item.label}</span><Icon name="chevronRight" size={16} />
+                </button>
+              ))}
+            </div>
+          </>}
+        </div>
+      </nav>
+      {quickAddOpen && <>
+        <button className="quick-add-backdrop" type="button" tabIndex={-1} aria-label="ปิดเมนูเพิ่มรายการ" onClick={closeQuickAdd} />
+        <section className="quick-add-sheet" role="dialog" aria-modal="true" aria-labelledby="quick-add-title" onKeyDown={keepQuickAddFocusInside}>
+          <header className="quick-add-header">
+            <div><span>ทางลัด</span><h2 id="quick-add-title">ต้องการทำอะไร?</h2><p>เลือกเพิ่มหลักฐานหรือไปจัดการรายการประจำ</p></div>
+            <button className="icon-button" type="button" aria-label="ปิด" onClick={closeQuickAdd}><Icon name="close" size={19} /></button>
+          </header>
+          <div className="quick-add-options">
+            <button ref={firstQuickAddActionRef} className="quick-add-option upload" type="button" onClick={() => { closeQuickAdd(); onUpload(); }}>
+              <span className="quick-add-icon"><Icon name="upload" size={20} /></span><span><strong>เพิ่มจากสลิปหรือใบเสร็จ</strong><small>ตรวจข้อมูลก่อนบันทึก</small></span><Icon name="chevronRight" size={17} />
+            </button>
+            <button className="quick-add-option installment" type="button" onClick={() => { closeQuickAdd(); onNavigate("installments"); }}>
+              <span className="quick-add-icon"><Icon name="card" size={20} /></span><span><strong>จัดการรายการผ่อน</strong><small>เพิ่มแผนและดูงวดชำระ</small></span><Icon name="chevronRight" size={17} />
+            </button>
+            <button className="quick-add-option subscription" type="button" onClick={() => { closeQuickAdd(); onNavigate("subscriptions"); }}>
+              <span className="quick-add-icon"><Icon name="calendar" size={20} /></span><span><strong>จัดการบริการรายเดือน</strong><small>เพิ่มบริการและดูรอบเรียกเก็บ</small></span><Icon name="chevronRight" size={17} />
+            </button>
           </div>
-        </>}
-      </div>
-    </nav>
+        </section>
+      </>}
+    </>
   );
 }
 
@@ -1025,7 +1081,7 @@ function Topbar({ activeView, selectedMonth, monthChoices, connection, onMonthCh
 function Overview({ summary, transactions, installments, subscriptions, selectedMonth, onUpload, onNavigate, onSelectTransaction }) {
   const monthTransactions = summary.monthTransactions;
   return (
-    <div className="page-stack">
+    <div className="page-stack overview-page-stack">
       <section className="page-intro">
         <div>
           <span className="overview-eyebrow">สรุปประจำเดือน</span>
@@ -1037,28 +1093,26 @@ function Overview({ summary, transactions, installments, subscriptions, selected
 
       <section className="budget-snapshot" aria-label="สรุปยอดเดือน">
         <article className="balance-hero">
-          <div className="balance-hero-heading"><span className="balance-hero-icon"><Icon name="wallet" size={20} /></span><span>เงินคงเหลือ</span><span className="balance-month-chip">{getMonthLabel(selectedMonth)}</span></div>
+          <div className="balance-hero-heading"><span className="balance-hero-icon"><Icon name="wallet" size={20} /></span><span>ผลต่างที่บันทึก</span><span className="balance-month-chip">{getMonthLabel(selectedMonth)}</span></div>
           <strong>฿ {formatNumber(summary.balance)}</strong>
-          <small>รายรับลบรายจ่ายที่บันทึกไว้ในเดือนนี้</small>
-          <div className="balance-hero-bottom"><span><Icon name="arrowUp" size={14} />รายรับ <b>฿ {formatNumber(summary.income)}</b></span><i /><span><Icon name="arrowDown" size={14} />รายจ่าย <b>฿ {formatNumber(summary.expenses)}</b></span></div>
+          <small>รายรับ − รายจ่ายที่บันทึก · ไม่รวมบิลในอนาคต</small>
           <span className="balance-hero-decoration" aria-hidden="true" />
         </article>
         <div className="snapshot-side">
           <MetricCard label="รายรับ" value={`฿ ${formatNumber(summary.income)}`} detail="เงินเข้าที่บันทึกแล้ว" icon="arrowUp" tone="blue" />
           <MetricCard label="รายจ่าย" value={`฿ ${formatNumber(summary.expenses)}`} detail={`${monthTransactions.filter((item) => item.type === "expense").length} รายการในเดือนนี้`} icon="arrowDown" tone="coral" />
-          <article className="debt-ratio-card"><div className="metric-top"><div className="metric-icon"><Icon name="chart" size={19} /></div><span>ภาระต่อรายรับ</span></div><div className="debt-ratio-value"><strong>{summary.debtRatio}%</strong><small>บัตรเครดิตและยอดผ่อน</small></div><div className="progress-track"><div className="progress-fill" style={{ width: `${Math.min(summary.debtRatio, 100)}%` }} /></div><button className="text-button" type="button" onClick={() => onNavigate("installments")}>ดูภาระผ่อน <Icon name="chevronRight" size={15} /></button></article>
+          <article className="debt-ratio-card"><div className="metric-top"><div className="metric-icon"><Icon name="chart" size={19} /></div><span>ยอดชำระหนี้ต่อรายรับ</span></div><div className="debt-ratio-value"><strong>{summary.hasIncome ? `${summary.debtRatio}%` : "—"}</strong><small>{summary.hasIncome ? "เทียบกับรายรับที่บันทึก" : "เพิ่มรายรับเพื่อคำนวณ"}</small></div><div className="progress-track"><div className="progress-fill" style={{ width: `${summary.hasIncome ? Math.min(summary.debtRatio, 100) : 0}%` }} /></div><button className="text-button" type="button" onClick={() => onNavigate("installments")}>ดูรายการผ่อน <Icon name="chevronRight" size={15} /></button></article>
         </div>
       </section>
-
-      <button className="upload-banner" type="button" onClick={onUpload}>
-        <div className="upload-banner-icon"><Icon name="upload" size={24} /></div>
-        <div className="upload-banner-copy"><strong>อัปโหลดสลิปหรือใบเสร็จ</strong><span>เพิ่มหลักฐาน แล้วตรวจสอบข้อมูลก่อนบันทึกเข้าระบบ</span></div>
-        <span className="banner-action">เลือกไฟล์ <Icon name="chevronRight" size={19} /></span>
-      </button>
 
       <section className="dashboard-lower">
         <div className="overview-side-stack">
           <UpcomingPaymentPanel installments={installments} subscriptions={subscriptions} selectedMonth={selectedMonth} onNavigate={onNavigate} />
+          <button className="upload-banner overview-upload-banner" type="button" onClick={onUpload}>
+            <div className="upload-banner-icon"><Icon name="upload" size={22} /></div>
+            <div className="upload-banner-copy"><strong>เพิ่มสลิปหรือใบเสร็จ</strong><span>ตรวจข้อมูลก่อนบันทึก</span></div>
+            <span className="banner-action">เลือกไฟล์ <Icon name="chevronRight" size={17} /></span>
+          </button>
           <AiSummary summary={summary} onOpen={() => onNavigate("coach")} />
         </div>
         <div className="panel transaction-panel">
@@ -1095,6 +1149,7 @@ function UpcomingPaymentPanel({ installments, subscriptions, selectedMonth, onNa
     icon: "calendar",
   })).filter((subscription) => subscription.date);
   const dueItems = [...dueInstallments, ...dueSubscriptions].sort((left, right) => left.sortDate.localeCompare(right.sortDate));
+  const hasTrackedPlans = installments.length > 0 || subscriptions.length > 0;
 
   return (
     <section className="panel upcoming-panel" aria-label="รายการที่คาดว่าจะชำระในเดือนนี้">
@@ -1106,7 +1161,7 @@ function UpcomingPaymentPanel({ installments, subscriptions, selectedMonth, onNa
           <span className="upcoming-amount">฿ {formatNumber(item.amount)}</span>
         </button>)}
         {dueItems.length > 5 && <button className="text-button upcoming-more" type="button" onClick={() => onNavigate("installments")}>ดูอีก {dueItems.length - 5} รายการ <Icon name="chevronRight" size={15} /></button>}
-      </div> : <div className="upcoming-empty"><span><Icon name="check" size={16} /></span><strong>ยังไม่มีรายการครบกำหนด</strong><small>รายการผ่อนและบริการรายเดือนจะแสดงที่นี่</small><div><button className="text-button" type="button" onClick={() => onNavigate("installments")}>จัดการรายการผ่อน</button><button className="text-button" type="button" onClick={() => onNavigate("subscriptions")}>บริการรายเดือน</button></div></div>}
+      </div> : <div className="upcoming-empty"><span><Icon name={hasTrackedPlans ? "calendar" : "plus"} size={16} /></span><strong>{hasTrackedPlans ? "ไม่มีรายการครบกำหนดเดือนนี้" : "ยังไม่มีแผนชำระที่บันทึก"}</strong><small>{hasTrackedPlans ? "เลือกเดือนอื่นเพื่อดูรอบเรียกเก็บ" : "เพิ่มแผนผ่อนหรือบริการ เพื่อเห็นวันครบกำหนด"}</small><div><button className="text-button" type="button" onClick={() => onNavigate("installments")}>รายการผ่อน</button><button className="text-button" type="button" onClick={() => onNavigate("subscriptions")}>บริการรายเดือน</button></div></div>}
     </section>
   );
 }
@@ -1146,14 +1201,13 @@ function Status({ status }) {
 }
 
 function AiSummary({ summary, onOpen }) {
-  const ratioText = summary.debtRatio > 45 ? "สูงกว่าช่วงที่ควรเฝ้าดู" : "ยังอยู่ในระดับที่ติดตามได้";
   return (
     <aside className="ai-summary panel">
-      <div className="ai-heading"><div className="ai-symbol"><Icon name="sparkles" size={19} /></div><div><h3>คำแนะนำ AI</h3><span>สรุปจากข้อมูลเดือนนี้</span></div></div>
-      <div className="ai-message"><strong>{ratioText}</strong><p>ภาระบัตรเครดิตและหนี้สินรวม <b>฿ {formatNumber(summary.debt)}</b> หรือ {summary.debtRatio}% ของรายรับ</p></div>
+      <div className="ai-heading"><div className="ai-symbol"><Icon name="sparkles" size={19} /></div><div><h3>สรุปภาระที่บันทึก</h3><span>คำนวณจากรายการเดือนนี้ · ไม่ได้ใช้ AI</span></div></div>
+      <div className="ai-message"><strong>{summary.hasIncome ? `ยอดชำระหนี้ ${summary.debtRatio}% ของรายรับ` : "ยังไม่มีรายรับให้คำนวณสัดส่วน"}</strong><p>ยอดชำระหนี้ที่บันทึก <b>฿ {formatNumber(summary.debt)}</b>{summary.hasIncome ? ` จากรายรับ ฿ ${formatNumber(summary.income)}` : " · เพิ่มรายการรายรับเพื่อแสดงสัดส่วน"}</p></div>
       <div className="ai-divider" />
-      <div className="ai-next"><Icon name="lightbulb" size={18} /><span>หลังหักภาระแล้ว มีเงินคงเหลือ <b>฿ {formatNumber(summary.balance)}</b> สำหรับค่าใช้จ่ายอื่นและเงินสำรอง</span></div>
-      <button className="text-button" onClick={onOpen}>ดูคำแนะนำทั้งหมด <Icon name="chevronRight" size={16} /></button>
+      <div className="ai-next"><Icon name="lightbulb" size={18} /><span>ผลต่างรายรับและรายจ่ายที่บันทึก <b>฿ {formatNumber(summary.balance)}</b> ยังไม่รวมบิลที่ถึงกำหนดในอนาคต</span></div>
+      <button className="text-button" onClick={onOpen}>ดูแนวทางการเงิน <Icon name="chevronRight" size={16} /></button>
     </aside>
   );
 }
@@ -1162,7 +1216,8 @@ function PendingNotice({ count, onOpen }) {
   return <button className="pending-notice" onClick={onOpen}><span className="pending-dot"><Icon name="clock" size={16} /></span><span><strong>มี {count} รายการรอตรวจสอบ</strong><small>ตรวจข้อมูลจากรูปก่อนบันทึกจริง</small></span><Icon name="chevronRight" size={18} /></button>;
 }
 
-function UploadView({ onUpload, transactions, onReview }) {
+function UploadView({ onUpload, transactions, onReview, storageMode }) {
+  const saveDestination = storageMode === "google" ? "พร้อมส่งไป Google Sheets/Drive" : "บันทึกไว้ในอุปกรณ์นี้หลังยืนยัน";
   const pending = transactions.filter((item) => item.status === "รอตรวจสอบ");
   return (
     <div className="page-stack">
@@ -1174,7 +1229,7 @@ function UploadView({ onUpload, transactions, onReview }) {
           <span>รองรับ JPG, PNG, WebP, HEIC, HEIF และ PDF (ไม่เกิน 3 MB)</span>
           <small>ไฟล์จะยังไม่ถูกบันทึกเข้าข้อมูลหลัก จนกว่าจะกดยืนยัน</small>
         </button>
-        <div className="process-card panel"><h3>ขั้นตอนของรายการ</h3><ProcessStep number="01" title="อัปโหลดหลักฐาน" detail="รูปสลิปหรือใบเสร็จ" active /><ProcessStep number="02" title="ตรวจสอบข้อมูล" detail="วันที่ จำนวนเงิน หมวดหมู่ และเดือนงบประมาณ" /><ProcessStep number="03" title="ยืนยันรายการ" detail="พร้อมส่งต่อไป Google Sheets/Drive" /></div>
+        <div className="process-card panel"><h3>ขั้นตอนของรายการ</h3><ProcessStep number="01" title="อัปโหลดหลักฐาน" detail="รูปสลิปหรือใบเสร็จ" active /><ProcessStep number="02" title="ตรวจสอบข้อมูล" detail="วันที่ จำนวนเงิน หมวดหมู่ และเดือนงบประมาณ" /><ProcessStep number="03" title="ยืนยันรายการ" detail={saveDestination} /></div>
       </section>
       <section className="panel pending-panel"><div className="panel-header"><div><h3>รายการรอตรวจสอบ</h3><span>รายการเหล่านี้ยังไม่กระทบยอดรวม</span></div><span className="count-label">{pending.length} รายการ</span></div>{pending.length ? pending.map((item) => <button className="pending-row" key={item.id} onClick={() => onReview(item)}><span className="row-icon pending"><Icon name="image" size={16} /></span><span className="pending-name"><strong>{item.name}</strong><small>{item.fileName || "หลักฐานที่อัปโหลด"}</small></span><span className="pending-amount">{item.amount ? `฿ ${formatNumber(item.amount)}` : "รอกรอกจำนวนเงิน"}</span><Status status="รอตรวจสอบ" /><Icon name="chevronRight" size={17} /></button>) : <div className="empty-state"><Icon name="check" size={22} /><strong>ไม่มีรายการค้างอยู่</strong><span>รายการใหม่จะมาอยู่ตรงนี้ก่อนยืนยัน</span></div>}</section>
     </div>
@@ -1578,12 +1633,17 @@ function InstallmentFormModal({ saving, onClose, onSave }) {
 
 function CoachView({ summary, selectedMonth }) {
   const ratio = summary.debtRatio;
-  const level = ratio >= 50 ? "ต้องเฝ้าระวัง" : ratio >= 35 ? "ควรวางแผนต่อเนื่อง" : "อยู่ในเกณฑ์ควบคุมได้";
+  const description = summary.hasIncome
+    ? `ยอดชำระหนี้ที่บันทึก ฿ ${formatNumber(summary.debt)} คิดเป็น ${ratio}% ของรายรับที่บันทึกไว้ ตัวเลขนี้ไม่รวมยอดหนี้คงค้างหรือรายการที่ยังไม่ได้บันทึก`
+    : "เดือนนี้ยังไม่มีรายรับที่บันทึก จึงยังคำนวณสัดส่วนไม่ได้";
+  const balanceGuidance = summary.hasIncome
+    ? `ผลต่างรายรับและรายจ่ายที่บันทึก ฿ ${formatNumber(summary.balance)} · ยังไม่รวมบิลที่ถึงกำหนดในอนาคต ควรตรวจยอดก่อนวางแผนเงินสำรอง`
+    : "บันทึกรายรับและรายจ่ายก่อน เพื่อให้เห็นผลต่างของรายการในเดือนนี้";
   return (
     <div className="page-stack">
-      <section className="page-intro"><div><h2>คำแนะนำ AI</h2><p>มุมมองเชิงปฏิบัติจากรายการของเดือน {getMonthLabel(selectedMonth)}</p></div><span className="beta-label"><Icon name="sparkles" size={15} />AI Coach</span></section>
-      <section className="coach-hero"><div className="coach-orb"><Icon name="sparkles" size={28} /></div><div><span className="coach-kicker">สรุปสถานะการเงิน</span><h3>{level}</h3><p>ระบบเห็นว่าภาระบัตรเครดิตและหนี้สินอยู่ที่ {ratio}% ของรายรับในเดือนนี้</p></div><div className="coach-number"><strong>{ratio}%</strong><span>ภาระต่อรายรับ</span></div></section>
-      <section className="coach-grid"><AdviceCard icon="wallet" title="รักษาเงินคงเหลือ" tone="green" text={`หลังหักภาระแล้ว คงเหลือ ฿ ${formatNumber(summary.balance)} ควรกันส่วนหนึ่งเป็นเงินสำรองก่อนเพิ่มค่าใช้จ่ายใหม่`} /><AdviceCard icon="card" title="รวมวันครบกำหนด" tone="blue" text="แนะนำให้บันทึกวันครบกำหนดของแต่ละเจ้าหนี้ เพื่อให้ระบบเตือนล่วงหน้าและเห็นยอดที่ต้องเตรียมได้แม่นขึ้น" /><AdviceCard icon="sparkles" title="อ่านข้อความจากสลิป" tone="amber" text="OCR อ่านข้อความจากรูปบนอุปกรณ์และเติมข้อมูลเบื้องต้นให้ตรวจสอบก่อนบันทึก ส่วนการวิเคราะห์ด้วย AI ยังไม่ได้เชื่อมต่อ" /></section>
+      <section className="page-intro"><div><h2>แนวทางการเงิน</h2><p>สรุปจากรายการที่บันทึกไว้ในเดือน {getMonthLabel(selectedMonth)}</p></div><span className="beta-label"><Icon name="sparkles" size={15} />คำนวณจากรายการ</span></section>
+      <section className="coach-hero"><div className="coach-orb"><Icon name="sparkles" size={28} /></div><div><span className="coach-kicker">ข้อมูลเดือนนี้</span><h3>{summary.hasIncome ? "สัดส่วนที่บันทึกไว้" : "ข้อมูลยังไม่พอคำนวณ"}</h3><p>{description}</p></div><div className="coach-number"><strong>{summary.hasIncome ? `${ratio}%` : "—"}</strong><span>ยอดชำระหนี้ต่อรายรับ</span></div></section>
+      <section className="coach-grid"><AdviceCard icon="wallet" title="ดูผลต่างที่บันทึก" tone="green" text={balanceGuidance} /><AdviceCard icon="card" title="รวมวันครบกำหนด" tone="blue" text="เพิ่มแผนผ่อนหรือบริการรายเดือน เพื่อดูยอดและวันชำระที่ต้องเตรียมในแต่ละเดือน" /><AdviceCard icon="sparkles" title="ตรวจข้อมูลจากสลิป" tone="amber" text="ระบบอ่านข้อความเบื้องต้นจากรูปบนอุปกรณ์ ข้อมูลยังไม่ถูกบันทึกจนกว่าจะตรวจสอบและยืนยัน" /></section>
       <section className="panel rules-panel"><div className="panel-header"><div><h3>กติกาที่ระบบใช้ตอนนี้</h3><span>ทำให้การจัดเดือนงบประมาณสอดคล้องกับวิธีใช้เงินจริง</span></div></div><div className="rule-list"><RuleItem title="เงินเดือนปลายเดือน" detail="รายรับวันที่ 25 เป็นต้นไป สามารถจัดสรรเป็นงบเดือนถัดไป" /><RuleItem title="ชำระหนี้หลังเงินเดือน" detail="รายการบัตรเครดิตและหนี้สินวันที่ 25 เป็นต้นไป จะเสนอเดือนถัดไป" /><RuleItem title="ตรวจสอบก่อนบันทึก" detail="รูปใหม่จะอยู่สถานะรอตรวจสอบ จนกว่าจะยืนยันรายการ" /></div></section>
     </div>
   );
