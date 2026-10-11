@@ -40,3 +40,21 @@ The dashboard uses a monthly budget hierarchy inspired by YNAB, a concise upcomi
 - Local Vite Preview: Overview rendered at the available 552 × 847 browser surface; mobile navigation opened the More menu and navigated to Subscriptions; the subscription form opened and canceled without saving data.
 - No Playwright package or configured automated test suite is present. The local preview was checked through the available browser UI; exact iPhone Air and desktop viewport profiles were not re-tested in this pass.
 - A previous environment note (2026-10-05): direct Vite development startup was blocked because Vite scanned parent-directory `/Users/et/package.json` and `/Users/et/tsconfig.json`, which contained merge-conflict markers. Those files are outside this repository; the production build and local Preview worked.
+
+## Verification on 2026-10-11 — playful pastel theme (Concept 1)
+
+- Responsive visual review used explicit browser viewports: iPhone Air 420 × 912, iPad portrait 1024 × 1366, and Mac desktop 1440 × 900.
+- No horizontal document overflow at any of the three viewports. The iPhone bottom navigation stayed fixed while the subscription page scrolled to its end; the page content remained visible above it.
+- iPhone navigation interaction passed: “More” opened its menu, “Subscriptions” reached the subscription screen, and the central add action opened its bottom sheet. The empty demo data remained unchanged; no form was submitted and no file was uploaded.
+- iPad portrait retained a separate compact icon rail and content area; desktop retained the labeled sidebar. Neither layout overlapped the dashboard.
+- Browser console: no errors or warnings observed.
+- `npm run build`: passed. `git diff --check`: passed. No automated test suite is configured.
+- Dependency note: `npm audit --omit=dev` reports one high advisory for `source-map-js@1.2.1`, reached through PostCSS/Vite. The same version is present in the committed base lockfile, so it predates this theme change; it was not auto-updated as part of this UI task.
+
+Final result: passed
+
+## Security follow-up on 2026-10-11
+
+- Root cause confirmed: `source-map-js@1.2.1` was selected under `Vite → PostCSS → source-map-js`; the vulnerable parser can block the Node.js event loop when given a crafted indexed source map.
+- Updated only the resolved transitive package in `package-lock.json` to patched `source-map-js@1.2.2`. The existing PostCSS semver range accepts the patched release, so no override or Vite upgrade was necessary; this security fix did not change `package.json`.
+- `npm explain source-map-js`: resolves to `1.2.2`. `npm audit --omit=dev`: 0 vulnerabilities. `npm run build`: passed. `git diff --check`: passed.

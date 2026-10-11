@@ -56,6 +56,24 @@ const navItems = [
   { key: "coach", label: "แนวทางการเงิน", shortLabel: "แนวทาง", icon: "sparkles" },
 ];
 
+const transactionIconRules = [
+  { pattern: /อาหาร/, icon: "food", tone: "food" },
+  { pattern: /เดินทาง/, icon: "train", tone: "travel" },
+  { pattern: /ช้อปปิ้ง|ซื้อของ/, icon: "shopping", tone: "shopping" },
+  { pattern: /สุขภาพ/, icon: "health", tone: "health" },
+  { pattern: /การศึกษา/, icon: "education", tone: "education" },
+  { pattern: /ประกัน/, icon: "insurance", tone: "insurance" },
+  { pattern: /บ้าน|ที่พัก/, icon: "home", tone: "home" },
+  { pattern: /สาธารณูปโภค|โทรศัพท์|อินเทอร์เน็ต/, icon: "utilities", tone: "utilities" },
+  { pattern: /บัตรเครดิต|หนี้สิน|ผ่อน/, icon: "card", tone: "debt" },
+];
+
+function getTransactionIconDetails(transaction) {
+  if (transaction.type === "income") return { icon: "money", tone: "income" };
+  return transactionIconRules.find(({ pattern }) => pattern.test(transaction.category || ""))
+    || { icon: "receipt", tone: "other" };
+}
+
 const subscriptionCategories = ["บันเทิง", "ทำงาน", "พื้นที่เก็บข้อมูล", "สุขภาพ", "การศึกษา", "อื่นๆ"];
 const subscriptionPaymentMethods = ["KBank", "SCB", "UOB", "บัตรเครดิตอื่นๆ", "Apple Pay", "Google Play", "อื่นๆ"];
 
@@ -1082,21 +1100,24 @@ function Overview({ summary, transactions, installments, subscriptions, selected
   const monthTransactions = summary.monthTransactions;
   return (
     <div className="page-stack overview-page-stack">
-      <section className="page-intro">
-        <div>
+      <section className="page-intro overview-intro">
+        <div className="overview-intro-copy">
           <span className="overview-eyebrow">สรุปประจำเดือน</span>
           <h2>ภาพรวมการเงิน</h2>
           <p>ติดตามรายรับ รายจ่าย และกำหนดชำระของเดือน {getMonthLabel(selectedMonth)}</p>
         </div>
+        <img className="overview-garden-art" src="/illustrations/finance-window.avif" alt="" aria-hidden="true" />
         <button className="secondary-button" onClick={() => onNavigate("history")}><Icon name="list" size={17} />ดูประวัติทั้งหมด</button>
       </section>
 
       <section className="budget-snapshot" aria-label="สรุปยอดเดือน">
         <article className="balance-hero">
-          <div className="balance-hero-heading"><span className="balance-hero-icon"><Icon name="wallet" size={20} /></span><span>ผลต่างที่บันทึก</span><span className="balance-month-chip">{getMonthLabel(selectedMonth)}</span></div>
-          <strong>฿ {formatNumber(summary.balance)}</strong>
-          <small>รายรับ − รายจ่ายที่บันทึก · ไม่รวมบิลในอนาคต</small>
-          <span className="balance-hero-decoration" aria-hidden="true" />
+          <div className="balance-copy">
+            <div className="balance-hero-heading"><span className="balance-hero-icon"><Icon name="wallet" size={20} /></span><span>ผลต่างที่บันทึก</span><span className="balance-month-chip">{getMonthLabel(selectedMonth)}</span></div>
+            <strong>฿ {formatNumber(summary.balance)}</strong>
+            <small>รายรับ − รายจ่ายที่บันทึก · ไม่รวมบิลในอนาคต</small>
+          </div>
+          <img className="balance-illustration" src="/illustrations/finance-wallet.avif" alt="" aria-hidden="true" />
         </article>
         <div className="snapshot-side">
           <MetricCard label="รายรับ" value={`฿ ${formatNumber(summary.income)}`} detail="เงินเข้าที่บันทึกแล้ว" icon="arrowUp" tone="blue" />
@@ -1115,7 +1136,7 @@ function Overview({ summary, transactions, installments, subscriptions, selected
           </button>
           <AiSummary summary={summary} onOpen={() => onNavigate("coach")} />
         </div>
-        <div className="panel transaction-panel">
+        <div className="panel transaction-panel overview-transactions">
           <div className="panel-header"><div><h3>รายการทั้งหมดในเดือน {getMonthLabel(selectedMonth)}</h3><span>{monthTransactions.length} รายการ</span></div><button className="text-button" onClick={() => onNavigate("history")}>ค้นหาและกรอง <Icon name="chevronRight" size={16} /></button></div>
           <TransactionTable transactions={monthTransactions} onSelect={onSelectTransaction} />
         </div>
@@ -1183,15 +1204,22 @@ function TransactionTable({ transactions, onSelect }) {
     <div className="transaction-table">
       <div className="table-row table-head"><span>วันที่</span><span>รายการ</span><span>จำนวนเงิน</span><span>หมวดหมู่</span><span>สถานะ</span></div>
       {transactions.map((transaction) => (
-        <button className="table-row table-body" key={transaction.id} onClick={() => onSelect(transaction)}>
+        <TransactionRow transaction={transaction} key={transaction.id} onSelect={onSelect} />
+      ))}
+    </div>
+  );
+}
+
+function TransactionRow({ transaction, onSelect }) {
+  const { icon, tone } = getTransactionIconDetails(transaction);
+  return (
+    <button className="table-row table-body" onClick={() => onSelect(transaction)}>
           <span className="date-cell" data-label="วันที่">{formatDate(transaction.date)}</span>
-          <span className="name-cell" data-label="รายการ"><span className={`row-icon ${transaction.type === "income" ? "income" : "expense"}`}><Icon name={transaction.type === "income" ? "arrowUp" : transaction.category === "บัตรเครดิต" ? "card" : "wallet"} size={16} /></span><span>{transaction.name}</span></span>
+          <span className="name-cell" data-label="รายการ"><span className={`row-icon transaction-icon-${tone}`}><Icon name={icon} size={19} /></span><span>{transaction.name}</span></span>
           <span className={transaction.type === "income" ? "amount income-text" : "amount"} data-label="จำนวนเงิน">{transaction.type === "income" ? "+" : "-"}฿ {formatNumber(transaction.amount)}</span>
           <span data-label="หมวดหมู่"><span className="category-text">{transaction.category}</span></span>
           <span data-label="สถานะ"><Status status={transaction.status} /></span>
-        </button>
-      ))}
-    </div>
+    </button>
   );
 }
 
