@@ -130,6 +130,7 @@ export function getSummary(transactions, selectedMonth) {
   return {
     monthTransactions,
     income,
+    hasIncome: income > 0,
     expenses,
     debt,
     balance: income - expenses,
