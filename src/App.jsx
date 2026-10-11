@@ -169,6 +169,27 @@ function App() {
   }, [activeView]);
 
   useEffect(() => {
+    const viewport = window.visualViewport;
+    if (!viewport) return undefined;
+
+    const syncVisualViewport = () => {
+      const height = viewport.height > 0 ? viewport.height : window.innerHeight;
+      document.documentElement.style.setProperty("--app-visual-viewport-height", `${height}px`);
+      document.documentElement.style.setProperty("--app-visual-viewport-offset-top", `${Math.max(0, viewport.offsetTop)}px`);
+    };
+
+    syncVisualViewport();
+    viewport.addEventListener("resize", syncVisualViewport);
+    viewport.addEventListener("scroll", syncVisualViewport);
+    return () => {
+      viewport.removeEventListener("resize", syncVisualViewport);
+      viewport.removeEventListener("scroll", syncVisualViewport);
+      document.documentElement.style.removeProperty("--app-visual-viewport-height");
+      document.documentElement.style.removeProperty("--app-visual-viewport-offset-top");
+    };
+  }, []);
+
+  useEffect(() => {
     const previewUrl = draft?.previewUrl;
     return () => { if (previewUrl) URL.revokeObjectURL(previewUrl); };
   }, [draft?.previewUrl]);
@@ -777,6 +798,8 @@ function App() {
             <Overview
               summary={summary}
               transactions={transactions}
+              installments={installments}
+              subscriptions={subscriptions}
               selectedMonth={selectedMonth}
               onUpload={openUpload}
               onNavigate={setActiveView}
@@ -831,7 +854,7 @@ function App() {
           </div>
         </main>
       </div>
-      <MobileNav activeView={activeView} onNavigate={setActiveView} />
+      <MobileNav activeView={activeView} onNavigate={setActiveView} onUpload={openUpload} />
       <input
         ref={fileInputRef}
         className="visually-hidden"
@@ -931,15 +954,39 @@ function Sidebar({ activeView, connection, onNavigate, onSettings }) {
   );
 }
 
-function MobileNav({ activeView, onNavigate }) {
+function MobileNav({ activeView, onNavigate, onUpload }) {
+  const [moreOpen, setMoreOpen] = useState(false);
+  const primaryItems = navItems.filter((item) => ["overview", "history", "installments"].includes(item.key));
+  const moreItems = navItems.filter((item) => ["subscriptions", "upload", "coach"].includes(item.key));
+  const moreActive = moreItems.some((item) => item.key === activeView);
+
   return (
     <nav className="mobile-nav" aria-label="เมนูมือถือ">
-      {navItems.map((item) => (
-        <button key={item.key} className={activeView === item.key ? "active" : ""} onClick={() => onNavigate(item.key)} aria-label={item.label} aria-current={activeView === item.key ? "page" : undefined}>
+      {primaryItems.slice(0, 2).map((item) => (
+        <button key={item.key} className={activeView === item.key ? "active" : ""} type="button" onClick={() => onNavigate(item.key)} aria-label={item.label} aria-current={activeView === item.key ? "page" : undefined}>
           <Icon name={item.icon} size={20} />
-          <span>{({ overview: "ภาพรวม", upload: "อัปโหลด", history: "ประวัติ", installments: "ผ่อนสินค้า", subscriptions: "บริการ", coach: "AI" })[item.key]}</span>
+          <span>{({ overview: "ภาพรวม", history: "รายการ" })[item.key]}</span>
         </button>
       ))}
+      <button className="mobile-add-button" type="button" onClick={onUpload} aria-label="เพิ่มรายการจากสลิป"><Icon name="plus" size={23} /><span>เพิ่ม</span></button>
+      <button className={activeView === "installments" ? "active" : ""} type="button" onClick={() => onNavigate("installments")} aria-label="รายการผ่อนสินค้า" aria-current={activeView === "installments" ? "page" : undefined}>
+        <Icon name="card" size={20} /><span>ผ่อน</span>
+      </button>
+      <div className="mobile-more-wrap">
+        <button className={moreActive ? "active" : ""} type="button" aria-expanded={moreOpen} aria-controls="mobile-more-menu" onClick={() => setMoreOpen((open) => !open)} aria-label="เมนูเพิ่มเติม">
+          <Icon name="more" size={20} /><span>เพิ่มเติม</span>
+        </button>
+        {moreOpen && <>
+          <button className="mobile-more-backdrop" type="button" aria-label="ปิดเมนูเพิ่มเติม" onClick={() => setMoreOpen(false)} />
+          <div className="mobile-more-menu" id="mobile-more-menu" role="menu" aria-label="หน้าจอเพิ่มเติม">
+            {moreItems.map((item) => (
+              <button key={item.key} type="button" role="menuitem" className={activeView === item.key ? "active" : ""} onClick={() => { setMoreOpen(false); onNavigate(item.key); }}>
+                <Icon name={item.icon} size={18} /><span>{item.label}</span><Icon name="chevronRight" size={16} />
+              </button>
+            ))}
+          </div>
+        </>}
+      </div>
     </nav>
   );
 }
@@ -975,40 +1022,92 @@ function Topbar({ activeView, selectedMonth, monthChoices, connection, onMonthCh
   );
 }
 
-function Overview({ summary, transactions, selectedMonth, onUpload, onNavigate, onSelectTransaction }) {
+function Overview({ summary, transactions, installments, subscriptions, selectedMonth, onUpload, onNavigate, onSelectTransaction }) {
   const monthTransactions = summary.monthTransactions;
   return (
     <div className="page-stack">
       <section className="page-intro">
         <div>
+          <span className="overview-eyebrow">สรุปประจำเดือน</span>
           <h2>ภาพรวมการเงิน</h2>
-          <p>ติดตามรายรับ ภาระที่ต้องจ่าย และรายการที่ยังรอตรวจสอบในเดือน {getMonthLabel(selectedMonth)}</p>
+          <p>ติดตามรายรับ รายจ่าย และกำหนดชำระของเดือน {getMonthLabel(selectedMonth)}</p>
         </div>
         <button className="secondary-button" onClick={() => onNavigate("history")}><Icon name="list" size={17} />ดูประวัติทั้งหมด</button>
       </section>
 
-      <section className="metric-grid" aria-label="สรุปยอดเดือน">
-        <MetricCard label="ยอดคงเหลือ" value={`฿ ${formatNumber(summary.balance)}`} detail="หลังหักภาระที่ต้องจ่าย" icon="wallet" tone="green" />
-        <MetricCard label="รายรับ" value={`฿ ${formatNumber(summary.income)}`} detail="รายรับที่จัดสรรในเดือนนี้" icon="arrowUp" tone="blue" />
-        <MetricCard label="ภาระที่ต้องจ่าย" value={`฿ ${formatNumber(summary.expenses)}`} detail={`${summary.monthTransactions.filter((item) => item.type === "expense").length} รายการที่บันทึกแล้ว`} icon="card" tone="coral" />
-        <MetricCard label="สัดส่วนภาระต่อรายรับ" value={`${summary.debtRatio}%`} detail="บัตรเครดิตและหนี้สิน/ผ่อนชำระ" icon="chart" tone="amber" progress={summary.debtRatio} />
+      <section className="budget-snapshot" aria-label="สรุปยอดเดือน">
+        <article className="balance-hero">
+          <div className="balance-hero-heading"><span className="balance-hero-icon"><Icon name="wallet" size={20} /></span><span>เงินคงเหลือ</span><span className="balance-month-chip">{getMonthLabel(selectedMonth)}</span></div>
+          <strong>฿ {formatNumber(summary.balance)}</strong>
+          <small>รายรับลบรายจ่ายที่บันทึกไว้ในเดือนนี้</small>
+          <div className="balance-hero-bottom"><span><Icon name="arrowUp" size={14} />รายรับ <b>฿ {formatNumber(summary.income)}</b></span><i /><span><Icon name="arrowDown" size={14} />รายจ่าย <b>฿ {formatNumber(summary.expenses)}</b></span></div>
+          <span className="balance-hero-decoration" aria-hidden="true" />
+        </article>
+        <div className="snapshot-side">
+          <MetricCard label="รายรับ" value={`฿ ${formatNumber(summary.income)}`} detail="เงินเข้าที่บันทึกแล้ว" icon="arrowUp" tone="blue" />
+          <MetricCard label="รายจ่าย" value={`฿ ${formatNumber(summary.expenses)}`} detail={`${monthTransactions.filter((item) => item.type === "expense").length} รายการในเดือนนี้`} icon="arrowDown" tone="coral" />
+          <article className="debt-ratio-card"><div className="metric-top"><div className="metric-icon"><Icon name="chart" size={19} /></div><span>ภาระต่อรายรับ</span></div><div className="debt-ratio-value"><strong>{summary.debtRatio}%</strong><small>บัตรเครดิตและยอดผ่อน</small></div><div className="progress-track"><div className="progress-fill" style={{ width: `${Math.min(summary.debtRatio, 100)}%` }} /></div><button className="text-button" type="button" onClick={() => onNavigate("installments")}>ดูภาระผ่อน <Icon name="chevronRight" size={15} /></button></article>
+        </div>
       </section>
 
-      <section className="upload-banner" onClick={onUpload} role="button" tabIndex={0} onKeyDown={(event) => event.key === "Enter" && onUpload()}>
+      <button className="upload-banner" type="button" onClick={onUpload}>
         <div className="upload-banner-icon"><Icon name="upload" size={24} /></div>
         <div className="upload-banner-copy"><strong>อัปโหลดสลิปหรือใบเสร็จ</strong><span>เพิ่มหลักฐาน แล้วตรวจสอบข้อมูลก่อนบันทึกเข้าระบบ</span></div>
         <span className="banner-action">เลือกไฟล์ <Icon name="chevronRight" size={19} /></span>
-      </section>
+      </button>
 
       <section className="dashboard-lower">
+        <div className="overview-side-stack">
+          <UpcomingPaymentPanel installments={installments} subscriptions={subscriptions} selectedMonth={selectedMonth} onNavigate={onNavigate} />
+          <AiSummary summary={summary} onOpen={() => onNavigate("coach")} />
+        </div>
         <div className="panel transaction-panel">
           <div className="panel-header"><div><h3>รายการทั้งหมดในเดือน {getMonthLabel(selectedMonth)}</h3><span>{monthTransactions.length} รายการ</span></div><button className="text-button" onClick={() => onNavigate("history")}>ค้นหาและกรอง <Icon name="chevronRight" size={16} /></button></div>
           <TransactionTable transactions={monthTransactions} onSelect={onSelectTransaction} />
         </div>
-        <AiSummary summary={summary} onOpen={() => onNavigate("coach")} />
       </section>
       {transactions.some((item) => item.status === "รอตรวจสอบ") && <PendingNotice count={transactions.filter((item) => item.status === "รอตรวจสอบ").length} onOpen={() => onNavigate("upload")} />}
     </div>
+  );
+}
+
+function UpcomingPaymentPanel({ installments, subscriptions, selectedMonth, onNavigate }) {
+  const dueInstallments = summarizeInstallments(installments, selectedMonth).dueThisMonth
+    .filter((payment) => !payment.paid)
+    .map((payment) => ({
+      key: `${payment.plan.id}:${payment.installmentNumber}`,
+      name: payment.plan.name,
+      source: `${installmentBanks.find((bank) => bank.value === payment.plan.bank)?.label || payment.plan.bank} · งวดที่ ${payment.installmentNumber}`,
+      sortDate: payment.month,
+      date: installmentMonthLabel(payment.month, { short: true }),
+      amount: payment.amount,
+      view: "installments",
+      icon: "card",
+    }));
+  const dueSubscriptions = subscriptions.map((subscription) => ({
+    key: subscription.id,
+    name: subscription.name,
+    source: `${subscription.category || "บริการ"} · ${subscription.paymentMethod || "ไม่ระบุช่องทาง"}`,
+    sortDate: subscriptionBillingDate(subscription, selectedMonth),
+    date: subscriptionBillingDate(subscription, selectedMonth),
+    amount: Number(subscription.amount || 0),
+    view: "subscriptions",
+    icon: "calendar",
+  })).filter((subscription) => subscription.date);
+  const dueItems = [...dueInstallments, ...dueSubscriptions].sort((left, right) => left.sortDate.localeCompare(right.sortDate));
+
+  return (
+    <section className="panel upcoming-panel" aria-label="รายการที่คาดว่าจะชำระในเดือนนี้">
+      <div className="panel-header upcoming-header"><div><h3>กำหนดชำระเดือนนี้</h3><span>{dueItems.length ? `${dueItems.length} รายการที่ต้องเตรียม` : "แผนผ่อนและบริการรายเดือน"}</span></div><span className="upcoming-count">{dueItems.length}</span></div>
+      {dueItems.length ? <div className="upcoming-list">
+        {dueItems.slice(0, 5).map((item) => <button className="upcoming-row" key={item.key} type="button" onClick={() => onNavigate(item.view)}>
+          <span className={`upcoming-icon ${item.view}`}><Icon name={item.icon} size={17} /></span>
+          <span className="upcoming-copy"><strong>{item.name}</strong><small>{item.source}</small><small className="upcoming-date">{item.date}</small></span>
+          <span className="upcoming-amount">฿ {formatNumber(item.amount)}</span>
+        </button>)}
+        {dueItems.length > 5 && <button className="text-button upcoming-more" type="button" onClick={() => onNavigate("installments")}>ดูอีก {dueItems.length - 5} รายการ <Icon name="chevronRight" size={15} /></button>}
+      </div> : <div className="upcoming-empty"><span><Icon name="check" size={16} /></span><strong>ยังไม่มีรายการครบกำหนด</strong><small>รายการผ่อนและบริการรายเดือนจะแสดงที่นี่</small><div><button className="text-button" type="button" onClick={() => onNavigate("installments")}>จัดการรายการผ่อน</button><button className="text-button" type="button" onClick={() => onNavigate("subscriptions")}>บริการรายเดือน</button></div></div>}
+    </section>
   );
 }
 
