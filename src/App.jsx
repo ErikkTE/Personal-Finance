@@ -241,6 +241,7 @@ function App() {
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [selectedSubscription, setSelectedSubscription] = useState(null);
+  const [editingSubscription, setEditingSubscription] = useState(null);
   const [loginError, setLoginError] = useState("");
   const fileInputRef = useRef(null);
 
@@ -604,10 +605,11 @@ function App() {
       setToast("ยังบันทึกข้ามอุปกรณ์ไม่ได้ กรุณาอัปเดต Apps Script ให้รองรับรายการสมัครบริการก่อน");
       return false;
     }
+    const existing = subscriptions.find((item) => item.id === input.id);
     const subscription = {
       ...input,
       id: input.id || globalThis.crypto?.randomUUID?.() || `SUB-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      createdAt: new Date().toISOString(),
+      createdAt: existing?.createdAt || input.createdAt || new Date().toISOString(),
     };
     setSavingInstallment(true);
     try {
@@ -1055,6 +1057,7 @@ function App() {
               updatingPayment={updatingPayment}
               paidCelebrationKey={paidCelebrationKey}
               onCreate={createInstallment}
+              onUpdate={createInstallment}
               onTogglePayment={toggleInstallmentPayment}
               onDelete={(plan) => setDeleteTarget({ type: "installment", id: plan.id, name: plan.name })}
               onSettings={() => setShowSettings(true)}
@@ -1075,6 +1078,8 @@ function App() {
               onSettings={() => setShowSettings(true)}
               categoryOptions={subscriptionCategoryOptions}
               onAddCategory={addCustomCategory}
+              editingSubscription={editingSubscription}
+              onCloseEdit={() => setEditingSubscription(null)}
             />
           )}
           {activeView === "recurring" && (
@@ -1112,7 +1117,7 @@ function App() {
       {draft && (
         <ReviewModal draft={draft} monthChoices={monthChoices} transactionNameOptions={transactionNameOptions} categoryOptions={transactionCategoryOptions} onAddCategory={addCustomCategory} saving={saving} storageMode={runtime.mode} onChange={updateDraft} onAttachEvidence={attachPendingEvidence} onClose={closeDraft} onConfirm={confirmDraft} onRequestDelete={() => setDeleteTarget({ type: "transaction", id: draft.transactionId, name: draft.name })} />
       )}
-      {selectedSubscription && <SubscriptionDetailModal subscription={selectedSubscription} selectedMonth={selectedMonth} onClose={() => setSelectedSubscription(null)} onDelete={() => setDeleteTarget({ type: "subscription", id: selectedSubscription.id, name: selectedSubscription.name })} />}
+      {selectedSubscription && <SubscriptionDetailModal subscription={selectedSubscription} selectedMonth={selectedMonth} onClose={() => setSelectedSubscription(null)} onEdit={() => { setEditingSubscription(selectedSubscription); setSelectedSubscription(null); }} onDelete={() => setDeleteTarget({ type: "subscription", id: selectedSubscription.id, name: selectedSubscription.name })} />}
       {deleteTarget && <DeleteConfirmDialog target={deleteTarget} storageMode={runtime.mode} busy={deleteBusy} onCancel={() => !deleteBusy && setDeleteTarget(null)} onConfirm={confirmDeleteTarget} />}
       {showSettings && <ConnectionDialog connection={connection} onClose={() => setShowSettings(false)} onLogout={handleLogout} onRetry={retryGoogleConnection} />}
       {toast && <div className="toast" role="status" aria-live="polite"><Icon name="check" size={17} /><span className="toast-message">{toast}</span>{toastAction?.message === toast && <button className="toast-undo-button" type="button" onClick={undoLastDelete} disabled={toastActionBusy}>{toastActionBusy ? "กำลังคืน…" : "เลิกทำ"}</button>}</div>}
@@ -1536,8 +1541,9 @@ function HistoryView({ transactions, selectedMonth, connection, onSelectTransact
   );
 }
 
-function InstallmentsView({ plans, month, onMonthChange, storageMode, syncReady, syncError, onRetrySync, saving, updatingPayment, paidCelebrationKey, onCreate, onTogglePayment, onDelete, onSettings }) {
+function InstallmentsView({ plans, month, onMonthChange, storageMode, syncReady, syncError, onRetrySync, saving, updatingPayment, paidCelebrationKey, onCreate, onUpdate, onTogglePayment, onDelete, onSettings }) {
   const [formOpen, setFormOpen] = useState(false);
+  const [editingPlan, setEditingPlan] = useState(null);
   const summary = summarizeInstallments(plans, month);
   const duePlans = [...new Map(summary.dueThisMonth.map(({ plan }) => [plan.id, plan])).values()];
   const dueSources = [...new Set(duePlans.map((plan) => installmentBanks.find((item) => item.value === plan.bank)?.label || plan.bank))];
@@ -1551,7 +1557,7 @@ function InstallmentsView({ plans, month, onMonthChange, storageMode, syncReady,
           <h2>ผ่อนสินค้าด้วยบัตรเครดิต</h2>
           <p>ดูยอดที่ต้องจ่ายแต่ละเดือน และทำเครื่องหมายเมื่อชำระแล้ว</p>
         </div>
-        <button className="primary-button installment-add-button" type="button" onClick={() => setFormOpen(true)} disabled={!canSave} title={!canSave ? "อัปเดตการเชื่อมต่อก่อนบันทึกแผนผ่อน" : undefined}>
+        <button className="primary-button installment-add-button" type="button" onClick={() => { setEditingPlan(null); setFormOpen(true); }} disabled={!canSave} title={!canSave ? "อัปเดตการเชื่อมต่อก่อนบันทึกแผนผ่อน" : undefined}>
           <Icon name="plus" size={18} />เพิ่มรายการผ่อน
         </button>
       </section>
@@ -1602,6 +1608,8 @@ function InstallmentsView({ plans, month, onMonthChange, storageMode, syncReady,
               paidCelebrationKey={paidCelebrationKey}
               onTogglePayment={onTogglePayment}
               canDelete={canSave}
+              canEdit={canSave}
+              onEdit={() => { setEditingPlan(plan); setFormOpen(true); }}
               onDelete={() => onDelete(plan)}
             />
           ))}
@@ -1611,19 +1619,19 @@ function InstallmentsView({ plans, month, onMonthChange, storageMode, syncReady,
           <div className="installment-empty-icon"><Icon name="card" size={25} /></div>
           <strong>ยังไม่มีรายการผ่อน</strong>
           <span>เพิ่มสินค้าใบแรก แล้วระบบจะสร้างตารางยอดชำระรายเดือนให้</span>
-          <button className="secondary-button" type="button" onClick={() => setFormOpen(true)} disabled={!canSave}><Icon name="plus" size={16} />เพิ่มรายการผ่อน</button>
+          <button className="secondary-button" type="button" onClick={() => { setEditingPlan(null); setFormOpen(true); }} disabled={!canSave}><Icon name="plus" size={16} />เพิ่มรายการผ่อน</button>
         </section>
       )}
 
-      {formOpen && <InstallmentFormModal saving={saving} onClose={() => setFormOpen(false)} onSave={async (form) => {
-        const saved = await onCreate(form);
-        if (saved) setFormOpen(false);
+      {formOpen && <InstallmentFormModal key={editingPlan?.id || "new"} plan={editingPlan} saving={saving} onClose={() => { setFormOpen(false); setEditingPlan(null); }} onSave={async (form) => {
+        const saved = editingPlan ? await onUpdate(form) : await onCreate(form);
+        if (saved) { setFormOpen(false); setEditingPlan(null); }
       }} />}
     </div>
   );
 }
 
-function InstallmentPlanCard({ plan, index, updatingPayment, paidCelebrationKey, onTogglePayment, canDelete, onDelete }) {
+function InstallmentPlanCard({ plan, index, updatingPayment, paidCelebrationKey, onTogglePayment, canDelete, canEdit, onEdit, onDelete }) {
   const [expanded, setExpanded] = useState(false);
   const [scheduleExpanded, setScheduleExpanded] = useState(false);
   const bank = installmentBanks.find((item) => item.value === plan.bank) || { label: plan.bank || "ไม่ระบุ", short: "?", tone: "loan" };
@@ -1693,14 +1701,14 @@ function InstallmentPlanCard({ plan, index, updatingPayment, paidCelebrationKey,
               </div>
             </div>
           )}
-          <div className="installment-delete-row"><span>นำแผนนี้ออกจากรายการผ่อน</span><button className="danger-button" type="button" onClick={onDelete} disabled={!canDelete} title={!canDelete ? "รอการเชื่อมต่อ Apps Script เพื่อบันทึกการลบ" : undefined}><Icon name="trash" size={15} />ลบแผนผ่อน</button></div>
+          <div className="installment-delete-row"><button className="secondary-button installment-edit-button" type="button" onClick={onEdit} disabled={!canEdit} title={!canEdit ? "รอการเชื่อมต่อ Apps Script เพื่อบันทึกการแก้ไข" : undefined}><Icon name="edit" size={15} />แก้ไขข้อมูล</button><span>นำแผนนี้ออกจากรายการผ่อน</span><button className="danger-button" type="button" onClick={onDelete} disabled={!canDelete} title={!canDelete ? "รอการเชื่อมต่อ Apps Script เพื่อบันทึกการลบ" : undefined}><Icon name="trash" size={15} />ลบแผนผ่อน</button></div>
         </div>
       )}
     </article>
   );
 }
 
-function SubscriptionsView({ subscriptions, selectedMonth, storageMode, syncReady, syncError, onRetrySync, saving, onCreate, onSelect, onDelete, onSettings, categoryOptions: availableCategories, onAddCategory }) {
+function SubscriptionsView({ subscriptions, selectedMonth, storageMode, syncReady, syncError, onRetrySync, saving, onCreate, onSelect, onDelete, onSettings, categoryOptions: availableCategories, onAddCategory, editingSubscription, onCloseEdit }) {
   const [formOpen, setFormOpen] = useState(false);
   const canSave = storageMode !== "google" || syncReady;
   const monthlyDue = useMemo(() => subscriptions.map((subscription) => ({
@@ -1740,7 +1748,7 @@ function SubscriptionsView({ subscriptions, selectedMonth, storageMode, syncRead
         {orderedSubscriptions.length ? <div className="subscription-list">{orderedSubscriptions.map((subscription) => <SubscriptionRow key={subscription.id} subscription={subscription} selectedMonth={selectedMonth} onSelect={() => onSelect(subscription)} onDelete={() => onDelete(subscription)} />)}</div> : <div className="subscription-empty"><span><Icon name="calendar" size={22} /></span><strong>ยังไม่มีบริการที่ติดตาม</strong><small>เพิ่มชื่อแอปหรือบริการ แล้วระบบจะแสดงเดือนที่เรียกเก็บให้อัตโนมัติ</small><button className="secondary-button" type="button" onClick={() => setFormOpen(true)} disabled={!canSave}><Icon name="plus" size={16} />เพิ่มบริการแรก</button></div>}
       </section>
 
-      {formOpen && <SubscriptionFormModal saving={saving} categoryOptions={availableCategories} onAddCategory={onAddCategory} onClose={() => setFormOpen(false)} onSave={async (form) => { const saved = await onCreate(form); if (saved) setFormOpen(false); }} />}
+      {(formOpen || editingSubscription) && <SubscriptionFormModal key={editingSubscription?.id || "new"} subscription={editingSubscription} saving={saving} categoryOptions={availableCategories} onAddCategory={onAddCategory} onClose={() => { setFormOpen(false); onCloseEdit?.(); }} onSave={async (form) => { const saved = await onCreate(form); if (saved) { setFormOpen(false); onCloseEdit?.(); } }} />}
     </div>
   );
 }
@@ -1760,17 +1768,17 @@ function SubscriptionRow({ subscription, selectedMonth, onSelect, onDelete }) {
   );
 }
 
-function SubscriptionFormModal({ saving, categoryOptions: availableCategories, onAddCategory, onClose, onSave }) {
-  const [form, setForm] = useState({ name: "", amount: "", cycle: "monthly", nextBillingDate: defaultSubscriptionBillingDate(), category: "บันเทิง", paymentMethod: "KBank", note: "" });
+function SubscriptionFormModal({ subscription, saving, categoryOptions: availableCategories, onAddCategory, onClose, onSave }) {
+  const [form, setForm] = useState(() => subscription ? { ...subscription, amount: String(subscription.amount) } : { name: "", amount: "", cycle: "monthly", nextBillingDate: defaultSubscriptionBillingDate(), category: "บันเทิง", paymentMethod: "KBank", note: "" });
   function change(field, value) { setForm((current) => ({ ...current, [field]: value })); }
   async function submit(event) {
     event.preventDefault();
-    await onSave({ ...form, amount: Number(form.amount), id: globalThis.crypto?.randomUUID?.() || `SUB-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` });
+    await onSave({ ...form, amount: Number(form.amount), id: form.id || globalThis.crypto?.randomUUID?.() || `SUB-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` });
   }
   return (
     <div className="modal-backdrop subscription-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !saving && onClose()}>
       <section className="subscription-form-modal" role="dialog" aria-modal="true" aria-labelledby="subscription-form-title">
-        <header className="modal-header"><div><span className="modal-kicker">บริการที่เรียกเก็บเป็นประจำ</span><h2 id="subscription-form-title">เพิ่มรายการสมัครบริการ</h2></div><button className="icon-button" type="button" aria-label="ปิด" onClick={onClose} disabled={saving}><Icon name="close" size={19} /></button></header>
+        <header className="modal-header"><div><span className="modal-kicker">บริการที่เรียกเก็บเป็นประจำ</span><h2 id="subscription-form-title">{subscription ? "แก้ไขรายการสมัครบริการ" : "เพิ่มรายการสมัครบริการ"}</h2></div><button className="icon-button" type="button" aria-label="ปิด" onClick={onClose} disabled={saving}><Icon name="close" size={19} /></button></header>
         <form onSubmit={submit}>
           <div className="review-form subscription-form-body">
             <label>ชื่อแอปหรือบริการ<input autoFocus required maxLength={120} placeholder="เช่น iCloud+, Netflix, YouTube Premium" value={form.name} onChange={(event) => change("name", event.target.value)} /></label>
@@ -1779,14 +1787,14 @@ function SubscriptionFormModal({ saving, categoryOptions: availableCategories, o
             <label>ช่องทางชำระ<select value={form.paymentMethod} onChange={(event) => change("paymentMethod", event.target.value)}>{subscriptionPaymentMethods.map((method) => <option key={method}>{method}</option>)}</select></label>
             <label>หมายเหตุ<textarea rows="2" maxLength={500} placeholder="เช่น แพ็กเกจครอบครัว หรือบัญชีที่ใช้" value={form.note} onChange={(event) => change("note", event.target.value)} /></label>
           </div>
-          <footer className="modal-footer"><button className="secondary-button" type="button" onClick={onClose} disabled={saving}>ยกเลิก</button><button className="primary-button" type="submit" disabled={saving}>{saving ? "กำลังบันทึก…" : <><Icon name="check" size={17} />บันทึกรายการ</>}</button></footer>
+          <footer className="modal-footer"><button className="secondary-button" type="button" onClick={onClose} disabled={saving}>ยกเลิก</button><button className="primary-button" type="submit" disabled={saving}>{saving ? "กำลังบันทึก…" : <><Icon name="check" size={17} />{subscription ? "บันทึกการแก้ไข" : "บันทึกรายการ"}</>}</button></footer>
         </form>
       </section>
     </div>
   );
 }
 
-function SubscriptionDetailModal({ subscription, selectedMonth, onClose, onDelete }) {
+function SubscriptionDetailModal({ subscription, selectedMonth, onClose, onEdit, onDelete }) {
   const dueDate = subscriptionBillingDate(subscription, selectedMonth);
   const nextDate = nextSubscriptionBillingDate(subscription, selectedMonth);
   return (
@@ -1797,23 +1805,27 @@ function SubscriptionDetailModal({ subscription, selectedMonth, onClose, onDelet
           <div className="subscription-detail-amount"><span><Icon name="calendar" size={18} /></span><div><small>{dueDate ? `ครบกำหนด ${getMonthLabel(selectedMonth)}` : `ไม่มีรอบเรียกเก็บใน ${getMonthLabel(selectedMonth)}`}</small><strong>฿ {formatNumber(subscription.amount)}</strong></div><em>{subscription.cycle === "yearly" ? "รายปี" : "รายเดือน"}</em></div>
           <dl className="subscription-detail-list"><div><dt>วันที่เรียกเก็บ</dt><dd>{dueDate ? formatDate(dueDate) : `ครั้งถัดไป ${formatDate(nextDate)}`}</dd></div><div><dt>หมวดหมู่</dt><dd>{subscription.category || "อื่นๆ"}</dd></div><div><dt>ช่องทางชำระ</dt><dd>{subscription.paymentMethod}</dd></div>{subscription.note && <div><dt>หมายเหตุ</dt><dd>{subscription.note}</dd></div>}</dl>
         </div>
-        <footer className="modal-footer subscription-detail-footer"><button className="danger-button" type="button" onClick={onDelete}><Icon name="trash" size={16} />ลบบริการ</button><button className="secondary-button" type="button" onClick={onClose}>ปิด</button></footer>
+        <footer className="modal-footer subscription-detail-footer"><button className="danger-button" type="button" onClick={onDelete}><Icon name="trash" size={16} />ลบบริการ</button><div className="subscription-detail-actions"><button className="secondary-button" type="button" onClick={onEdit}><Icon name="edit" size={15} />แก้ไข</button><button className="secondary-button" type="button" onClick={onClose}>ปิด</button></div></footer>
       </section>
     </div>
   );
 }
 
-function InstallmentFormModal({ saving, onClose, onSave }) {
+function InstallmentFormModal({ plan, saving, onClose, onSave }) {
   const [form, setForm] = useState(() => ({
-    id: "",
-    name: "",
-    price: "",
-    downPayment: "0",
-    interestRate: "0",
-    months: "10",
-    bank: "กสิกรไทย",
-    startMonth: nextInstallmentMonth(),
+    id: plan?.id || "",
+    name: plan?.name || "",
+    price: plan ? String(plan.price) : "",
+    downPayment: plan ? String(plan.downPayment) : "0",
+    interestRate: plan ? String(plan.interestRate) : "0",
+    months: plan ? String(plan.months) : "10",
+    bank: plan?.bank || "กสิกรไทย",
+    startMonth: plan?.startMonth || nextInstallmentMonth(),
+    schedule: plan?.schedule || [],
+    createdAt: plan?.createdAt || "",
   }));
+  const [formError, setFormError] = useState("");
+  const hasPaidPayments = Boolean(plan?.schedule.some((payment) => payment.paid));
   const price = Number(form.price);
   const downPayment = Number(form.downPayment || 0);
   const rate = Number(form.interestRate);
@@ -1823,20 +1835,27 @@ function InstallmentFormModal({ saving, onClose, onSave }) {
 
   function change(field, value) {
     setForm((current) => ({ ...current, [field]: value }));
+    setFormError("");
   }
 
   async function submit(event) {
     event.preventDefault();
+    if (hasPaidPayments && months < Math.max(...plan.schedule.filter((payment) => payment.paid).map((payment) => payment.installmentNumber))) {
+      setFormError("จำนวนงวดต้องไม่ต่ำกว่างวดที่ชำระไปแล้ว");
+      return;
+    }
     const id = form.id || globalThis.crypto?.randomUUID?.() || `INS-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    setForm((current) => ({ ...current, id }));
-    await onSave({ ...form, id, price, downPayment, interestRate: rate, months });
+    const refreshed = prepareInstallmentPlan({ ...form, id, price, downPayment, interestRate: rate, months, schedule: [] });
+    const paidPayments = new Map((plan?.schedule || []).filter((payment) => payment.paid).map((payment) => [payment.installmentNumber, payment]));
+    const schedule = refreshed.schedule.map((payment) => paidPayments.get(payment.installmentNumber) || payment);
+    await onSave({ ...refreshed, createdAt: plan?.createdAt || refreshed.createdAt, schedule });
   }
 
   return (
     <div className="modal-backdrop installment-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !saving && onClose()}>
       <section className="installment-form-modal" role="dialog" aria-modal="true" aria-labelledby="installment-form-title">
         <header className="modal-header">
-          <div><span className="modal-kicker">แผนผ่อนสินค้า</span><h2 id="installment-form-title">เพิ่มรายการผ่อน</h2></div>
+          <div><span className="modal-kicker">แผนผ่อนสินค้า</span><h2 id="installment-form-title">{plan ? "แก้ไขรายการผ่อน" : "เพิ่มรายการผ่อน"}</h2></div>
           <button className="icon-button" type="button" aria-label="ปิด" onClick={onClose} disabled={saving}><Icon name="close" size={19} /></button>
         </header>
         <form onSubmit={submit}>
@@ -1844,17 +1863,18 @@ function InstallmentFormModal({ saving, onClose, onSave }) {
             <div className="review-form installment-fields">
               <label>ชื่อรายการสินค้า<input autoFocus maxLength={120} required placeholder="เช่น iPad Air, โทรศัพท์" value={form.name} onChange={(event) => change("name", event.target.value)} /></label>
               <div className="form-two-col">
-                <label>ราคาสินค้า (บาท)<input type="number" min="0.01" max="100000000" step="0.01" required placeholder="เช่น 25000" value={form.price} onChange={(event) => change("price", event.target.value)} /></label>
-                <label>เงินดาวน์ (บาท)<input type="number" min="0" max={price > 0 ? Math.max(0, price - 0.01) : 0} step="0.01" required value={form.downPayment} onChange={(event) => change("downPayment", event.target.value)} /><small className="installment-field-hint">หักออกจากราคาก่อนคำนวณดอกเบี้ย</small></label>
+                <label>ราคาสินค้า (บาท)<input type="number" min="0.01" max="100000000" step="0.01" required placeholder="เช่น 25000" value={form.price} disabled={hasPaidPayments} onChange={(event) => change("price", event.target.value)} /></label>
+                <label>เงินดาวน์ (บาท)<input type="number" min="0" max={price > 0 ? Math.max(0, price - 0.01) : 0} step="0.01" required value={form.downPayment} disabled={hasPaidPayments} onChange={(event) => change("downPayment", event.target.value)} /><small className="installment-field-hint">หักออกจากราคาก่อนคำนวณดอกเบี้ย</small></label>
               </div>
               <div className="form-two-col">
-                <label>ดอกเบี้ยรวมตลอดแผน (%)<input type="number" min="0" max="100" step="0.01" required value={form.interestRate} onChange={(event) => change("interestRate", event.target.value)} /><small className="installment-field-hint">เริ่มต้น 0% · คิดจากยอดหลังหักเงินดาวน์</small></label>
-                <label>จำนวนเดือน<input type="number" min="1" max="60" step="1" required value={form.months} onChange={(event) => change("months", event.target.value)} /></label>
+                <label>ดอกเบี้ยรวมตลอดแผน (%)<input type="number" min="0" max="100" step="0.01" required value={form.interestRate} disabled={hasPaidPayments} onChange={(event) => change("interestRate", event.target.value)} /><small className="installment-field-hint">เริ่มต้น 0% · คิดจากยอดหลังหักเงินดาวน์</small></label>
+                <label>จำนวนเดือน<input type="number" min="1" max="60" step="1" required value={form.months} disabled={hasPaidPayments} onChange={(event) => change("months", event.target.value)} /></label>
               </div>
+              {hasPaidPayments && <p className="installment-edit-note"><Icon name="info" size={15} />แก้ชื่อหรือธนาคารได้ ส่วนยอดและจำนวนงวดล็อกไว้เพื่อรักษาประวัติงวดที่ชำระแล้ว</p>}
               <div className="installment-start-month" aria-live="polite"><span className="installment-start-icon"><Icon name="calendar" size={16} /></span><span><small>เริ่มชำระงวดแรก</small><strong>{installmentMonthLabel(form.startMonth)}</strong></span></div>
               <fieldset className="installment-bank-picker">
                 <legend>ธนาคาร / สินเชื่อ</legend>
-                <div>{installmentBanks.map((bank) => <button key={bank.value} className={`installment-bank-choice ${form.bank === bank.value ? "selected" : ""}`} type="button" aria-pressed={form.bank === bank.value} onClick={() => change("bank", bank.value)}><span className={`installment-bank-mark bank-${bank.tone}`}>{bank.short}</span><span>{bank.label}</span><span className="bank-choice-check"><Icon name="check" size={13} /></span></button>)}</div>
+                <div>{installmentBanks.map((bank) => <button key={bank.value} className={`installment-bank-choice ${form.bank === bank.value ? "selected" : ""}`} type="button" disabled={saving} aria-pressed={form.bank === bank.value} onClick={() => change("bank", bank.value)}><span className={`installment-bank-mark bank-${bank.tone}`}>{bank.short}</span><span>{bank.label}</span><span className="bank-choice-check"><Icon name="check" size={13} /></span></button>)}</div>
               </fieldset>
             </div>
             <aside className="installment-live-preview" aria-live="polite">
@@ -1869,9 +1889,10 @@ function InstallmentFormModal({ saving, onClose, onSave }) {
               <p>คิดดอกเบี้ยจากยอดคงเหลือหลังหักเงินดาวน์ แบ่งจ่ายรายเดือนและปรับเศษสตางค์ในงวดสุดท้าย</p>
             </aside>
           </div>
+          {formError && <div className="installment-form-error" role="alert"><Icon name="info" size={15} />{formError}</div>}
           <footer className="modal-footer">
             <button className="secondary-button" type="button" onClick={onClose} disabled={saving}>ยกเลิก</button>
-            <button className="primary-button" type="submit" disabled={saving || !form.name.trim() || !(price > 0) || downPayment < 0 || downPayment >= price || !(months > 0)}><Icon name={saving ? "clock" : "check"} size={16} />{saving ? "กำลังบันทึก…" : "บันทึกแผนผ่อน"}</button>
+            <button className="primary-button" type="submit" disabled={saving || !form.name.trim() || !(price > 0) || downPayment < 0 || downPayment >= price || !(months > 0)}><Icon name={saving ? "clock" : "check"} size={16} />{saving ? "กำลังบันทึก…" : plan ? "บันทึกการแก้ไข" : "บันทึกแผนผ่อน"}</button>
           </footer>
         </form>
       </section>

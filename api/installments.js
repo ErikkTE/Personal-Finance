@@ -44,13 +44,14 @@ function createSchedule(financedAmount, interestRate, months, startMonth) {
 
 function normalizePlan(input) {
   if (!input || typeof input !== "object") throw new Error("กรุณากรอกข้อมูลแผนผ่อนให้ครบ");
+  const isUpdate = typeof input.id === "string" && /^[A-Za-z0-9_-]{8,80}$/.test(input.id);
   const name = String(input.name || "").trim().slice(0, 120);
   const price = money(input.price);
   const downPayment = money(input.downPayment ?? 0);
   const interestRate = money(input.interestRate ?? 0);
   const months = Number(input.months);
   const bank = String(input.bank || "");
-  const startMonth = nextInstallmentMonthInBangkok();
+  const startMonth = isUpdate && validMonth(input.startMonth) ? input.startMonth : nextInstallmentMonthInBangkok();
   if (!name) throw new Error("กรุณาระบุชื่อสินค้า");
   if (!Number.isFinite(price) || price <= 0 || price > 100_000_000) throw new Error("ราคาสินค้าไม่ถูกต้อง");
   if (!Number.isFinite(downPayment) || downPayment < 0 || downPayment >= price) throw new Error("เงินดาวน์ต้องไม่ติดลบและต้องน้อยกว่าราคาสินค้า");
@@ -61,7 +62,7 @@ function normalizePlan(input) {
 
   const financedAmount = money(price - downPayment);
   const installmentTotal = money(financedAmount * (1 + interestRate / 100));
-  return {
+  const plan = {
     id: typeof input.id === "string" && /^[A-Za-z0-9_-]{8,80}$/.test(input.id) ? input.id : randomUUID(),
     name,
     price,
@@ -75,8 +76,20 @@ function normalizePlan(input) {
     installmentTotal,
     totalAmount: money(downPayment + installmentTotal),
     createdAt: new Date().toISOString(),
-    schedule: createSchedule(financedAmount, interestRate, months, startMonth),
+    schedule: isUpdate && Array.isArray(input.schedule)
+      ? input.schedule.map((payment, index) => ({
+          installmentNumber: Number(payment?.installmentNumber || index + 1),
+          month: String(payment?.month || ""),
+          amount: money(payment?.amount),
+        }))
+      : createSchedule(financedAmount, interestRate, months, startMonth),
   };
+  if (plan.schedule.length !== months || plan.schedule.some((payment, index) =>
+    payment.installmentNumber !== index + 1 || !validMonth(payment.month) || !Number.isFinite(payment.amount) || payment.amount < 0
+  )) {
+    throw new Error("ตารางงวดผ่อนไม่ถูกต้อง");
+  }
+  return plan;
 }
 
 export default async function handler(req, res) {

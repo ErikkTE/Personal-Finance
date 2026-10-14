@@ -693,8 +693,13 @@ button:focus-visible, [role="button"]:focus-visible, input:focus-visible, select
 .subscription-detail-list dt { color: var(--muted); font-size: 11px; }
 .subscription-detail-list dd { margin: 0; color: var(--text); font-size: 12px; font-weight: 600; text-align: right; overflow-wrap: anywhere; }
 .subscription-detail-footer { justify-content: space-between; }
+.subscription-detail-actions { display: flex; align-items: center; gap: 8px; }
 .review-modal-footer .danger-button { margin-right: auto; }
 .installment-delete-row { min-height: 53px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 12px; border-top: 1px solid #edf1f6; color: var(--muted); font-size: 10px; }
+.installment-edit-button { min-height: 40px; }
+.installment-edit-note, .installment-form-error { display: flex; align-items: flex-start; gap: 7px; margin: 0; padding: 10px 12px; border: 1px solid #dce9fb; border-radius: 11px; color: #3f638f; background: #f4f8ff; font-size: 11px; line-height: 1.55; }
+.installment-form-error { margin: 0 20px 10px; border-color: #f0d2d0; color: #a4312c; background: #fff6f5; }
+.installment-edit-note svg, .installment-form-error svg { flex: 0 0 auto; margin-top: 1px; }
 .danger-button, .danger-confirm-button { display: inline-flex; min-height: 40px; align-items: center; justify-content: center; gap: 7px; padding: 8px 12px; border: 1px solid #f0d2d0; border-radius: 11px; color: #b42318; background: #fff; font-size: 11px; font-weight: 650; white-space: nowrap; transition: background .16s ease, border-color .16s ease, transform .16s ease; }
 .danger-button:hover { border-color: #e9a9a5; background: #fff5f4; }
 .danger-confirm-button { min-width: 127px; border-color: #c9342d; color: #fff; background: #c9342d; box-shadow: 0 7px 14px rgba(201,52,45,.17); }
@@ -857,8 +862,9 @@ button:focus-visible, [role="button"]:focus-visible, input:focus-visible, select
   .subscription-detail-list > div { grid-template-columns: 105px 1fr; }
   .subscription-detail-footer { padding: 13px 17px max(14px, env(safe-area-inset-bottom)); }
   .subscription-detail-footer button { min-height: 46px; }
+  .subscription-detail-actions { flex: 1; justify-content: flex-end; }
   .installment-delete-row { align-items: flex-start; flex-direction: column; }
-  .installment-delete-row .danger-button { width: 100%; }
+  .installment-delete-row .danger-button, .installment-delete-row .installment-edit-button { width: 100%; }
   .review-modal-footer .danger-button { flex: 0 0 auto !important; }
   .delete-confirm-backdrop { align-items: end; padding: 0; }
   .delete-confirm-dialog { width: 100%; padding: 25px 19px max(20px, env(safe-area-inset-bottom)); border-radius: 22px 22px 0 0; }
