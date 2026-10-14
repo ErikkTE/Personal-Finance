@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "./icons";
+import CategorySelect from "./CategorySelect";
 import {
   categoryOptions,
   channelOptions,
@@ -39,6 +40,8 @@ import {
   removeSubscription as removeGoogleSubscription,
   restoreSubscription as restoreGoogleSubscription,
   listRecurringExpenses as listGoogleRecurringExpenses,
+  listCategories as listGoogleCategories,
+  saveCategory as saveGoogleCategory,
   saveRecurringExpense as saveGoogleRecurringExpense,
   removeRecurringExpense as removeGoogleRecurringExpense,
   restoreRecurringExpense as restoreGoogleRecurringExpense,
@@ -51,7 +54,7 @@ import {
 } from "./api";
 import { readReceipt } from "./receipt-ocr";
 import RecurringExpensesView from "./RecurringExpensesView";
-import { recurringExpenseMonthValues, summarizeFixedCommitments } from "./recurring-expenses";
+import { recurringExpenseCategories, recurringExpenseMonthValues, summarizeFixedCommitments } from "./recurring-expenses";
 
 const navItems = [
   { key: "overview", label: "ภาพรวม", shortLabel: "ภาพรวม", icon: "grid" },
@@ -82,7 +85,51 @@ function getTransactionIconDetails(transaction) {
 }
 
 const subscriptionCategories = ["บันเทิง", "ทำงาน", "พื้นที่เก็บข้อมูล", "สุขภาพ", "การศึกษา", "อื่นๆ"];
+const categoryDefaults = {
+  transactions: categoryOptions,
+  recurringExpenses: recurringExpenseCategories,
+  subscriptions: subscriptionCategories,
+};
 const subscriptionPaymentMethods = ["KBank", "SCB", "UOB", "บัตรเครดิตอื่นๆ", "Apple Pay", "Google Play", "อื่นๆ"];
+
+function normalizeCustomCategories(input) {
+  const seen = new Set();
+  const categories = [];
+  for (const item of Array.isArray(input) ? input : []) {
+    const scope = String(item?.scope || "");
+    const name = String(item?.name || "").trim();
+    const key = scope + ":" + name.toLocaleLowerCase();
+    if (!categoryDefaults[scope] || !name || name.length > 40 || seen.has(key)) continue;
+    seen.add(key);
+    categories.push({ scope, name, createdAt: String(item.createdAt || "") });
+  }
+  return categories;
+}
+
+function mergeCustomCategories(...sources) {
+  return normalizeCustomCategories(sources.flat());
+}
+
+function uniqueCategoryNames(...sources) {
+  const names = [];
+  const seen = new Set();
+  for (const value of sources.flat()) {
+    const name = String(value || "").trim();
+    const key = name.toLocaleLowerCase();
+    if (!name || seen.has(key)) continue;
+    seen.add(key);
+    names.push(name);
+  }
+  return names;
+}
+
+function loadSavedCustomCategories() {
+  try {
+    return normalizeCustomCategories(JSON.parse(window.localStorage.getItem("personal-finance-custom-categories") || "[]"));
+  } catch {
+    return [];
+  }
+}
 
 function loadSavedSubscriptions() {
   try {
@@ -173,6 +220,7 @@ function App() {
   const [installments, setInstallments] = useState([]);
   const [subscriptions, setSubscriptions] = useState([]);
   const [recurringExpenses, setRecurringExpenses] = useState([]);
+  const [customCategories, setCustomCategories] = useState(loadSavedCustomCategories);
   const [installmentMonth, setInstallmentMonth] = useState(currentInstallmentMonth);
   const [installmentSync, setInstallmentSync] = useState({ ready: false, error: "กำลังตรวจการเชื่อมต่อ" });
   const [subscriptionSync, setSubscriptionSync] = useState({ ready: false, error: "กำลังตรวจการเชื่อมต่อ" });
@@ -325,6 +373,14 @@ function App() {
   }, [recurringExpenses, runtime.status, runtime.mode]);
 
   useEffect(() => {
+    try {
+      window.localStorage.setItem("personal-finance-custom-categories", JSON.stringify(customCategories));
+    } catch {
+      setToast("หมวดหมู่ที่เพิ่มใหม่ยังบันทึกในอุปกรณ์นี้ไม่ได้");
+    }
+  }, [customCategories]);
+
+  useEffect(() => {
     if (!toast) return undefined;
     if (toastActionBusy) return undefined;
     const hasAction = toastAction?.message === toast;
@@ -365,17 +421,63 @@ function App() {
       .sort((left, right) => right.count - left.count || right.latestDate.localeCompare(left.latestDate) || left.name.localeCompare(right.name, "th"))
       .map((item) => item.name);
   }, [transactions, hiddenTransactions]);
+  const transactionCategoryOptions = useMemo(() => uniqueCategoryNames(
+    categoryDefaults.transactions,
+    customCategories.filter((item) => item.scope === "transactions").map((item) => item.name),
+    transactions.map((item) => item.category),
+    hiddenTransactions.map((item) => item.category)
+  ), [customCategories, transactions, hiddenTransactions]);
+  const recurringCategoryOptions = useMemo(() => uniqueCategoryNames(
+    categoryDefaults.recurringExpenses,
+    customCategories.filter((item) => item.scope === "recurringExpenses").map((item) => item.name),
+    recurringExpenses.map((item) => item.category)
+  ), [customCategories, recurringExpenses]);
+  const subscriptionCategoryOptions = useMemo(() => uniqueCategoryNames(
+    categoryDefaults.subscriptions,
+    customCategories.filter((item) => item.scope === "subscriptions").map((item) => item.name),
+    subscriptions.map((item) => item.category)
+  ), [customCategories, subscriptions]);
+
+  async function addCustomCategory(scope, inputName) {
+    const name = String(inputName || "").trim();
+    if (!categoryDefaults[scope] || !name || name.length > 40 || /^[=+\-@]/.test(name) || /[\u0000-\u001f\u007f]/.test(name)) {
+      setToast("ชื่อหมวดหมู่ต้องมี 1–40 ตัวอักษร");
+      return false;
+    }
+    const exists = uniqueCategoryNames(categoryDefaults[scope], customCategories.filter((item) => item.scope === scope).map((item) => item.name))
+      .some((item) => item.toLocaleLowerCase() === name.toLocaleLowerCase());
+    if (exists) {
+      setToast("มีหมวดหมู่นี้อยู่แล้ว");
+      return false;
+    }
+
+    try {
+      const category = runtime.mode === "google"
+        ? await saveGoogleCategory({ scope, name })
+        : { scope, name, createdAt: new Date().toISOString() };
+      setCustomCategories((current) => mergeCustomCategories(current, [category]));
+      setToast("เพิ่มหมวดหมู่ “" + name + "” แล้ว");
+      return category.name || name;
+    } catch (error) {
+      setToast(error.message || "บันทึกหมวดหมู่ไม่สำเร็จ");
+      return false;
+    }
+  }
 
   async function loadGoogleWorkspace() {
     setRuntime({ status: "syncing", mode: "google" });
     const [health, remoteTransactions] = await Promise.all([getGoogleStatus(), listTransactions()]);
     setTransactions(remoteTransactions.filter((item) => item.status !== "ลบแล้ว"));
     setHiddenTransactions(remoteTransactions.filter((item) => item.status === "ลบแล้ว"));
-    const [installmentResult, subscriptionResult, recurringExpenseResult] = await Promise.allSettled([
+    const [installmentResult, subscriptionResult, recurringExpenseResult, categoryResult] = await Promise.allSettled([
       listGoogleInstallments(),
       listGoogleSubscriptions(),
       listGoogleRecurringExpenses(),
+      listGoogleCategories(),
     ]);
+    if (categoryResult.status === "fulfilled") {
+      setCustomCategories((current) => mergeCustomCategories(current, categoryResult.value));
+    }
     if (installmentResult.status === "fulfilled") {
       setInstallments(installmentResult.value.map(prepareInstallmentPlan));
       setInstallmentSync({ ready: true, error: "" });
@@ -539,8 +641,9 @@ function App() {
       setToast(runtime.mode === "google" ? "บันทึกรายจ่ายประจำลง Google Sheets แล้ว" : "บันทึกรายจ่ายประจำไว้ในอุปกรณ์นี้แล้ว");
       return true;
     } catch (error) {
-      setToast(error.message || "บันทึกรายจ่ายประจำไม่สำเร็จ");
-      return false;
+      const message = error.message || "บันทึกรายจ่ายประจำไม่สำเร็จ";
+      setToast(message);
+      return { ok: false, error: message };
     } finally {
       setSavingRecurringExpense(false);
     }
@@ -936,6 +1039,7 @@ function App() {
               connection={connection}
               hiddenTransactions={hiddenTransactions.filter((item) => item.budgetMonth === selectedMonth)}
               onRestoreMonth={restoreHiddenForMonth}
+              categoryOptions={transactionCategoryOptions}
             />
           )}
           {activeView === "installments" && (
@@ -969,6 +1073,8 @@ function App() {
               onSelect={setSelectedSubscription}
               onDelete={(subscription) => setDeleteTarget({ type: "subscription", id: subscription.id, name: subscription.name })}
               onSettings={() => setShowSettings(true)}
+              categoryOptions={subscriptionCategoryOptions}
+              onAddCategory={addCustomCategory}
             />
           )}
           {activeView === "recurring" && (
@@ -984,6 +1090,8 @@ function App() {
               onDelete={(expense) => setDeleteTarget({ type: "recurringExpense", id: expense.id, name: expense.name })}
               onNavigate={setActiveView}
               onSettings={() => setShowSettings(true)}
+              categoryOptions={recurringCategoryOptions}
+              onAddCategory={addCustomCategory}
             />
           )}
           {activeView === "coach" && <CoachView summary={summary} selectedMonth={selectedMonth} />}
@@ -1002,7 +1110,7 @@ function App() {
         }}
       />
       {draft && (
-        <ReviewModal draft={draft} monthChoices={monthChoices} transactionNameOptions={transactionNameOptions} saving={saving} storageMode={runtime.mode} onChange={updateDraft} onAttachEvidence={attachPendingEvidence} onClose={closeDraft} onConfirm={confirmDraft} onRequestDelete={() => setDeleteTarget({ type: "transaction", id: draft.transactionId, name: draft.name })} />
+        <ReviewModal draft={draft} monthChoices={monthChoices} transactionNameOptions={transactionNameOptions} categoryOptions={transactionCategoryOptions} onAddCategory={addCustomCategory} saving={saving} storageMode={runtime.mode} onChange={updateDraft} onAttachEvidence={attachPendingEvidence} onClose={closeDraft} onConfirm={confirmDraft} onRequestDelete={() => setDeleteTarget({ type: "transaction", id: draft.transactionId, name: draft.name })} />
       )}
       {selectedSubscription && <SubscriptionDetailModal subscription={selectedSubscription} selectedMonth={selectedMonth} onClose={() => setSelectedSubscription(null)} onDelete={() => setDeleteTarget({ type: "subscription", id: selectedSubscription.id, name: selectedSubscription.name })} />}
       {deleteTarget && <DeleteConfirmDialog target={deleteTarget} storageMode={runtime.mode} busy={deleteBusy} onCancel={() => !deleteBusy && setDeleteTarget(null)} onConfirm={confirmDeleteTarget} />}
@@ -1380,11 +1488,11 @@ function ProcessStep({ number, title, detail, active }) {
   return <div className={`process-step ${active ? "active" : ""}`}><span className="step-number">{number}</span><span><strong>{title}</strong><small>{detail}</small></span>{active && <span className="step-current">ตอนนี้</span>}</div>;
 }
 
-function HistoryView({ transactions, selectedMonth, connection, onSelectTransaction, hiddenTransactions, onRestoreMonth }) {
+function HistoryView({ transactions, selectedMonth, connection, onSelectTransaction, hiddenTransactions, onRestoreMonth, categoryOptions: availableCategories }) {
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("ทั้งหมด");
   const [restoring, setRestoring] = useState(false);
-  const categories = ["ทั้งหมด", ...categoryOptions];
+  const categories = ["ทั้งหมด", ...availableCategories];
   const filtered = transactions.filter((item) => {
     const matchesMonth = item.budgetMonth === selectedMonth;
     const matchesCategory = category === "ทั้งหมด" || item.category === category;
@@ -1592,7 +1700,7 @@ function InstallmentPlanCard({ plan, index, updatingPayment, paidCelebrationKey,
   );
 }
 
-function SubscriptionsView({ subscriptions, selectedMonth, storageMode, syncReady, syncError, onRetrySync, saving, onCreate, onSelect, onDelete, onSettings }) {
+function SubscriptionsView({ subscriptions, selectedMonth, storageMode, syncReady, syncError, onRetrySync, saving, onCreate, onSelect, onDelete, onSettings, categoryOptions: availableCategories, onAddCategory }) {
   const [formOpen, setFormOpen] = useState(false);
   const canSave = storageMode !== "google" || syncReady;
   const monthlyDue = useMemo(() => subscriptions.map((subscription) => ({
@@ -1632,7 +1740,7 @@ function SubscriptionsView({ subscriptions, selectedMonth, storageMode, syncRead
         {orderedSubscriptions.length ? <div className="subscription-list">{orderedSubscriptions.map((subscription) => <SubscriptionRow key={subscription.id} subscription={subscription} selectedMonth={selectedMonth} onSelect={() => onSelect(subscription)} onDelete={() => onDelete(subscription)} />)}</div> : <div className="subscription-empty"><span><Icon name="calendar" size={22} /></span><strong>ยังไม่มีบริการที่ติดตาม</strong><small>เพิ่มชื่อแอปหรือบริการ แล้วระบบจะแสดงเดือนที่เรียกเก็บให้อัตโนมัติ</small><button className="secondary-button" type="button" onClick={() => setFormOpen(true)} disabled={!canSave}><Icon name="plus" size={16} />เพิ่มบริการแรก</button></div>}
       </section>
 
-      {formOpen && <SubscriptionFormModal saving={saving} onClose={() => setFormOpen(false)} onSave={async (form) => { const saved = await onCreate(form); if (saved) setFormOpen(false); }} />}
+      {formOpen && <SubscriptionFormModal saving={saving} categoryOptions={availableCategories} onAddCategory={onAddCategory} onClose={() => setFormOpen(false)} onSave={async (form) => { const saved = await onCreate(form); if (saved) setFormOpen(false); }} />}
     </div>
   );
 }
@@ -1652,7 +1760,7 @@ function SubscriptionRow({ subscription, selectedMonth, onSelect, onDelete }) {
   );
 }
 
-function SubscriptionFormModal({ saving, onClose, onSave }) {
+function SubscriptionFormModal({ saving, categoryOptions: availableCategories, onAddCategory, onClose, onSave }) {
   const [form, setForm] = useState({ name: "", amount: "", cycle: "monthly", nextBillingDate: defaultSubscriptionBillingDate(), category: "บันเทิง", paymentMethod: "KBank", note: "" });
   function change(field, value) { setForm((current) => ({ ...current, [field]: value })); }
   async function submit(event) {
@@ -1667,7 +1775,7 @@ function SubscriptionFormModal({ saving, onClose, onSave }) {
           <div className="review-form subscription-form-body">
             <label>ชื่อแอปหรือบริการ<input autoFocus required maxLength={120} placeholder="เช่น iCloud+, Netflix, YouTube Premium" value={form.name} onChange={(event) => change("name", event.target.value)} /></label>
             <div className="form-two-col"><label>ยอดเรียกเก็บ (บาท)<input type="number" min="0.01" max="100000000" step="0.01" required placeholder="เช่น 99" value={form.amount} onChange={(event) => change("amount", event.target.value)} /></label><label>รอบเรียกเก็บ<select value={form.cycle} onChange={(event) => change("cycle", event.target.value)}><option value="monthly">รายเดือน</option><option value="yearly">รายปี</option></select></label></div>
-            <div className="form-two-col"><label>วันเรียกเก็บครั้งถัดไป<input type="date" required value={form.nextBillingDate} onChange={(event) => change("nextBillingDate", event.target.value)} /></label><label>หมวดหมู่<select value={form.category} onChange={(event) => change("category", event.target.value)}>{subscriptionCategories.map((category) => <option key={category}>{category}</option>)}</select></label></div>
+            <div className="form-two-col"><label>วันเรียกเก็บครั้งถัดไป<input type="date" required value={form.nextBillingDate} onChange={(event) => change("nextBillingDate", event.target.value)} /></label><CategorySelect label="หมวดหมู่" scope="subscriptions" value={form.category} options={availableCategories} onChange={(value) => change("category", value)} onAddCategory={onAddCategory} /></div>
             <label>ช่องทางชำระ<select value={form.paymentMethod} onChange={(event) => change("paymentMethod", event.target.value)}>{subscriptionPaymentMethods.map((method) => <option key={method}>{method}</option>)}</select></label>
             <label>หมายเหตุ<textarea rows="2" maxLength={500} placeholder="เช่น แพ็กเกจครอบครัว หรือบัญชีที่ใช้" value={form.note} onChange={(event) => change("note", event.target.value)} /></label>
           </div>
@@ -1846,7 +1954,7 @@ function SavedEvidencePreview({ transactionId, evidenceUrl }) {
   return <img src={preview.url} alt="หลักฐานรายการจาก Google Drive" onError={() => setPreview((current) => ({ ...current, state: "failed", url: "" }))} />;
 }
 
-function ReviewModal({ draft, monthChoices, transactionNameOptions, saving, storageMode, onChange, onAttachEvidence, onClose, onConfirm, onRequestDelete }) {
+function ReviewModal({ draft, monthChoices, transactionNameOptions, categoryOptions: availableCategories, onAddCategory, saving, storageMode, onChange, onAttachEvidence, onClose, onConfirm, onRequestDelete }) {
   const isPending = Boolean(draft.isPending);
   const isExisting = Boolean(draft.isExisting) && !isPending;
   const isOcrProcessing = draft.ocrStatus === "reading";
@@ -1893,7 +2001,7 @@ function ReviewModal({ draft, monthChoices, transactionNameOptions, saving, stor
               {(!draft.name || !transactionNameOptions.includes(draft.name)) && <input type="text" value={draft.name || ""} onChange={(event) => onChange("name", event.target.value)} placeholder="พิมพ์ชื่อรายการ" disabled={fieldsDisabled} />}
             </label>
             <label>จำนวนเงิน (บาท)<input type="number" min="0" step="0.01" value={draft.amount ?? ""} onChange={(event) => onChange("amount", event.target.value)} disabled={fieldsDisabled} /></label>
-            <div className="form-two-col"><label>หมวดหมู่<select value={draft.category || "อื่นๆ"} onChange={(event) => onChange("category", event.target.value)} disabled={fieldsDisabled}>{categoryOptions.map((item) => <option key={item}>{item}</option>)}</select></label><label>ช่องทางจ่าย<select value={draft.channel || "อื่นๆ"} onChange={(event) => onChange("channel", event.target.value)} disabled={fieldsDisabled}>{channelOptions.map((item) => <option key={item}>{item}</option>)}</select></label></div>
+            <div className="form-two-col"><CategorySelect label="หมวดหมู่" scope="transactions" value={draft.category || "อื่นๆ"} options={availableCategories} disabled={fieldsDisabled} onChange={(value) => onChange("category", value)} onAddCategory={onAddCategory} /><label>ช่องทางจ่าย<select value={draft.channel || "อื่นๆ"} onChange={(event) => onChange("channel", event.target.value)} disabled={fieldsDisabled}>{channelOptions.map((item) => <option key={item}>{item}</option>)}</select></label></div>
             <label>เดือนงบประมาณ<select value={draft.budgetMonth || getCurrentMonthValue()} onChange={(event) => onChange("budgetMonth", event.target.value)} disabled={fieldsDisabled}>{monthChoices.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
             <label>หมายเหตุ<textarea rows="2" value={draft.note || ""} onChange={(event) => onChange("note", event.target.value)} disabled={fieldsDisabled} /></label>
             {draft.ocrText && <details className="ocr-text-details"><summary>ดูข้อความที่ OCR อ่านได้</summary><pre>{draft.ocrText}</pre></details>}

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { formatNumber, getMonthLabel } from "./data";
 import { recurringExpenseCategories, recurringExpenseDurationMonths, isValidMonth } from "./recurring-expenses";
 import { Icon } from "./icons";
+import CategorySelect from "./CategorySelect";
 
 const categoryVisuals = {
   "บ้านและที่พัก": { icon: "home", tone: "home" },
@@ -74,6 +75,8 @@ export default function RecurringExpensesView({
   onDelete,
   onNavigate,
   onSettings,
+  categoryOptions,
+  onAddCategory,
 }) {
   const [expandedGroups, setExpandedGroups] = useState({});
   const [formOpen, setFormOpen] = useState(false);
@@ -157,20 +160,28 @@ export default function RecurringExpensesView({
     if (!isValidMonth(draft.startMonth)) return setFormError("เลือกเดือนที่เริ่มชำระให้ถูกต้อง");
     if (draft.endMode === "ends" && (!isValidMonth(draft.endMonth) || draft.endMonth < draft.startMonth)) return setFormError("เดือนสิ้นสุดต้องไม่ก่อนเดือนเริ่มชำระ");
 
-    const result = await onSave({
-      ...(editingExpense ? { id: editingExpense.id } : {}),
-      name: draft.name.trim(),
-      amount: Math.round(amount * 100) / 100,
-      category: draft.category,
-      dueDay: Number(draft.dueDay),
-      startMonth: draft.startMonth,
-      endMonth: draft.endMode === "ends" ? draft.endMonth : "",
-      note: draft.note.trim(),
-    });
-    if (result) {
+    let result;
+    try {
+      result = await onSave({
+        ...(editingExpense ? { id: editingExpense.id } : {}),
+        name: draft.name.trim(),
+        amount: Math.round(amount * 100) / 100,
+        category: draft.category,
+        dueDay: Number(draft.dueDay),
+        startMonth: draft.startMonth,
+        endMonth: draft.endMode === "ends" ? draft.endMonth : "",
+        note: draft.note.trim(),
+      });
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : "บันทึกรายจ่ายไม่สำเร็จ ลองอีกครั้งนะ");
+      return;
+    }
+    if (result === true || result?.ok === true) {
       setFormOpen(false);
       setEditingExpense(null);
       setFormError("");
+    } else {
+      setFormError(result?.error || "บันทึกไม่สำเร็จ รายการยังไม่ถูกบันทึก ลองอีกครั้งนะ");
     }
   }
 
@@ -308,7 +319,7 @@ export default function RecurringExpensesView({
                 <label className="recurring-form-field"><span>ชื่อรายการ <i>*</i></span><input ref={firstFieldRef} type="text" value={draft.name} onChange={(event) => updateDraft("name", event.target.value)} maxLength={120} placeholder="เช่น ค่าเช่าบ้าน, อินเทอร์เน็ต" required /></label>
                 <div className="recurring-form-two-col">
                   <label className="recurring-form-field"><span>จำนวนเงินต่อเดือน <i>*</i></span><div className="recurring-money-input"><span>฿</span><input type="number" inputMode="decimal" value={draft.amount} onChange={(event) => updateDraft("amount", event.target.value)} min="0.01" max="100000000" step="0.01" placeholder="0.00" required /></div></label>
-                  <label className="recurring-form-field"><span>หมวดหมู่</span><select value={draft.category} onChange={(event) => updateDraft("category", event.target.value)}>{recurringExpenseCategories.map((category) => <option key={category} value={category}>{category}</option>)}</select></label>
+                  <CategorySelect className="recurring-form-field" label="หมวดหมู่" scope="recurringExpenses" value={draft.category} options={categoryOptions || recurringExpenseCategories} onChange={(value) => updateDraft("category", value)} onAddCategory={onAddCategory} />
                 </div>
                 <div className="recurring-form-two-col">
                   <label className="recurring-form-field"><span>วันที่ครบกำหนด</span><select value={draft.dueDay} onChange={(event) => updateDraft("dueDay", event.target.value)}>{Array.from({ length: 31 }, (_, index) => <option key={index + 1} value={index + 1}>วันที่ {index + 1}{index === 30 ? " (เดือนสั้นจะปรับเป็นวันสุดท้าย)" : ""}</option>)}</select></label>

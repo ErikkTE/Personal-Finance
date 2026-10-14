@@ -232,3 +232,18 @@ export async function restoreRecurringExpense(id) {
   if (!result?.restored) throw new Error("เซิร์ฟเวอร์ยืนยันการคืนรายจ่ายประจำไม่สำเร็จ");
   return result;
 }
+
+export async function listCategories() {
+  const result = await requestJson("/api/categories");
+  if (!Array.isArray(result?.categories)) throw new Error("รูปแบบหมวดหมู่จาก Google Sheets ไม่ถูกต้อง");
+  return result.categories;
+}
+
+export async function saveCategory(category) {
+  const result = await requestJson("/api/categories", {
+    method: "POST",
+    body: JSON.stringify({ category }),
+  });
+  if (!result?.category) throw new Error("Google Sheets ไม่ได้ยืนยันการบันทึกหมวดหมู่");
+  return result.category;
+}

@@ -38,6 +38,8 @@ Do not place the shared secret in browser code, a `VITE_*` variable, a public do
 
 Rows hidden before this restore feature was added do not have a saved previous status, so restoring those rows sets their status to `ยืนยันแล้ว`.
 
+The listCategories and saveCategory actions store custom category names in an App Categories tab. The tab is created automatically and keeps transaction, recurring-expense, and subscription categories separate.
+
 ### Receipt storage and retry behavior
 
 Set `DRIVE_FOLDER_ID` to the top-level folder. Evidence is first placed in `99_รอตรวจสอบ`; after the transaction row and Drive link are saved, the script moves it into `01_รายรับ`, `02_รายจ่ายประจำ`, or `03_รายจ่ายผันแปร` according to transaction type and nature. Missing subfolders are created automatically.

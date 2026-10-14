@@ -3,6 +3,8 @@ const TAB_INSTALLMENTS = "Installments";
 const TAB_INSTALLMENT_PAYMENTS = "Installment Payments";
 const TAB_SUBSCRIPTIONS = "Subscriptions";
 const TAB_RECURRING_EXPENSES = "Recurring Expenses";
+const TAB_APP_CATEGORIES = "App Categories";
+const APP_CATEGORY_HEADERS = ["ขอบเขต", "หมวดหมู่", "วันที่สร้าง"];
 const INSTALLMENT_HEADERS = ["Installment ID", "รายการสินค้า", "ราคาสินค้า", "เงินดาวน์", "ดอกเบี้ยรวม (%)", "จำนวนเดือน", "ธนาคาร", "เดือนเริ่มชำระ", "ยอดรวม", "วันที่บันทึก", "ลบเมื่อ"];
 const INSTALLMENT_PAYMENT_HEADERS = ["Installment ID", "งวดที่", "เดือนครบกำหนด", "จำนวนเงิน", "ชำระแล้ว", "วันที่ชำระ"];
 const SUBSCRIPTION_HEADERS = ["Subscription ID", "ชื่อบริการ", "จำนวนเงิน", "รอบเรียกเก็บ", "วันเรียกเก็บครั้งถัดไป", "หมวดหมู่", "ช่องทางชำระ", "หมายเหตุ", "วันที่บันทึก", "ลบเมื่อ"];
@@ -83,6 +85,12 @@ function doPost(event) {
         break;
       case "listRecurringExpenses":
         data = { recurringExpenses: listRecurringExpenses_() };
+        break;
+      case "listCategories":
+        data = { categories: listAppCategories_() };
+        break;
+      case "saveCategory":
+        data = saveAppCategory_(request.category);
         break;
       case "saveRecurringExpense":
         data = saveRecurringExpense_(request.recurringExpense);
@@ -413,12 +421,11 @@ function saveRecurringExpense_(input) {
   const startMonth = String(input.startMonth || "");
   const endMonth = String(input.endMonth || "");
   const note = String(input.note || "").trim().slice(0, 500);
-  const categories = ["บ้านและที่พัก", "สาธารณูปโภค", "ประกัน", "สุขภาพ", "การศึกษา", "อื่นๆ"];
   const validMonth = function (value) { return /^\d{4}-(0[1-9]|1[0-2])$/.test(value); };
   if (!/^[A-Za-z0-9_-]{8,80}$/.test(id) || !name || !Number.isFinite(amount) || amount <= 0 || amount > 100000000) {
     throw new Error("Recurring expense data is invalid");
   }
-  if (categories.indexOf(category) < 0 || !Number.isInteger(dueDay) || dueDay < 1 || dueDay > 31) {
+  if (!category || category.length > 40 || /^[=+\-@]/.test(category) || /[\u0000-\u001f\u007f]/.test(category) || !Number.isInteger(dueDay) || dueDay < 1 || dueDay > 31) {
     throw new Error("Recurring expense category or due day is invalid");
   }
   if (!validMonth(startMonth) || (endMonth && (!validMonth(endMonth) || endMonth < startMonth))) {
@@ -499,8 +506,11 @@ function recurringExpenseFromRow_(row, columns) {
     amount: Number(readCell_(row, columns, "จำนวนเงินต่อเดือน") || 0),
     category: String(readCell_(row, columns, "หมวดหมู่") || "อื่นๆ"),
     dueDay: Number(readCell_(row, columns, "วันที่ชำระ") || 1),
-    startMonth: String(readCell_(row, columns, "เดือนเริ่ม") || ""),
-    endMonth: String(readCell_(row, columns, "เดือนสิ้นสุด") || ""),
+    // Google Sheets may coerce an ISO month such as "2026-10" into a date
+    // serial. Normalize both strings and Date values back to yyyy-MM so the
+    // client can include the expense in its monthly summary.
+    startMonth: monthToIso_(readCell_(row, columns, "เดือนเริ่ม")),
+    endMonth: monthToIso_(readCell_(row, columns, "เดือนสิ้นสุด")),
     note: String(readCell_(row, columns, "หมายเหตุ") || ""),
     createdAt: dateToIso_(readCell_(row, columns, "วันที่บันทึก")),
     deletedAt: dateToIso_(readCell_(row, columns, "ลบเมื่อ")),
@@ -512,6 +522,78 @@ function ensureRecurringExpensesSheet_() {
   let sheet = spreadsheet.getSheetByName(TAB_RECURRING_EXPENSES);
   if (!sheet) sheet = spreadsheet.insertSheet(TAB_RECURRING_EXPENSES);
   ensureTableHeaders_(sheet, RECURRING_EXPENSE_HEADERS, "Recurring Expenses");
+  return sheet;
+}
+
+function listAppCategories_() {
+  const sheet = ensureAppCategoriesSheet_();
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return [];
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getDisplayValues()[0];
+  const columns = columnIndexes_(headers, APP_CATEGORY_HEADERS, "App Categories");
+  return sheet.getRange(2, 1, lastRow - 1, headers.length).getValues().map(function (row) {
+    return {
+      scope: String(readCell_(row, columns, "ขอบเขต") || ""),
+      name: String(readCell_(row, columns, "หมวดหมู่") || ""),
+      createdAt: dateToIso_(readCell_(row, columns, "วันที่สร้าง")),
+    };
+  }).filter(function (category) {
+    return Boolean(category.scope && category.name);
+  });
+}
+
+function saveAppCategory_(input) {
+  if (!input || typeof input !== "object") throw new Error("Category is required");
+  const scope = String(input.scope || "");
+  const name = String(input.name || "").trim();
+  const allowedScopes = ["transactions", "recurringExpenses", "subscriptions"];
+  if (allowedScopes.indexOf(scope) < 0 || !name || name.length > 40 || /^[=+\-@]/.test(name) || /[\u0000-\u001f\u007f]/.test(name)) {
+    throw new Error("Category data is invalid");
+  }
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(15000);
+  try {
+    const sheet = ensureAppCategoriesSheet_();
+    const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getDisplayValues()[0];
+    const columns = columnIndexes_(headers, APP_CATEGORY_HEADERS, "App Categories");
+    const lastRow = sheet.getLastRow();
+    if (lastRow >= 2) {
+      const rows = sheet.getRange(2, 1, lastRow - 1, headers.length).getValues();
+      for (let index = 0; index < rows.length; index += 1) {
+        const row = rows[index];
+        const savedScope = String(readCell_(row, columns, "ขอบเขต") || "");
+        const savedName = String(readCell_(row, columns, "หมวดหมู่") || "");
+        if (savedScope === scope && savedName.toLocaleLowerCase() === name.toLocaleLowerCase()) {
+          return {
+            category: {
+              scope: savedScope,
+              name: savedName,
+              createdAt: dateToIso_(readCell_(row, columns, "วันที่สร้าง")),
+            },
+          };
+        }
+      }
+    }
+
+    const row = new Array(headers.length).fill("");
+    putCell_(row, columns, "ขอบเขต", scope);
+    putCell_(row, columns, "หมวดหมู่", name);
+    putCell_(row, columns, "วันที่สร้าง", new Date());
+    const rowNumber = Math.max(sheet.getLastRow() + 1, 2);
+    ensureSheetRowCapacity_(sheet, rowNumber);
+    sheet.getRange(rowNumber, 1, 1, row.length).setValues([row]);
+    return { category: { scope: scope, name: name, createdAt: new Date().toISOString() } };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function ensureAppCategoriesSheet_() {
+  const spreadsheet = getSpreadsheet_();
+  let sheet = spreadsheet.getSheetByName(TAB_APP_CATEGORIES);
+  if (!sheet) sheet = spreadsheet.insertSheet(TAB_APP_CATEGORIES);
+  ensureTableHeaders_(sheet, APP_CATEGORY_HEADERS, "App Categories");
   return sheet;
 }
 
