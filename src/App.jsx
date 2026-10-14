@@ -34,6 +34,10 @@ import {
   restoreHiddenTransactions as restoreGoogleHiddenTransactions,
   getEvidencePreview,
   listInstallments as listGoogleInstallments,
+  listDebts as listGoogleDebts,
+  saveDebt as saveGoogleDebt,
+  recordDebtPayment as recordGoogleDebtPayment,
+  getDebtEvidencePreview as getGoogleDebtEvidencePreview,
   listSubscriptions as listGoogleSubscriptions,
   removeInstallment as removeGoogleInstallment,
   restoreInstallment as restoreGoogleInstallment,
@@ -55,12 +59,15 @@ import {
 import { readReceipt } from "./receipt-ocr";
 import RecurringExpensesView from "./RecurringExpensesView";
 import { recurringExpenseCategories, recurringExpenseMonthValues, summarizeFixedCommitments } from "./recurring-expenses";
+import DebtCollectionView from "./DebtCollectionView";
+import { buildDebtSchedule, makeDebtId, summarizeDebt, validateDebtInput } from "./debts";
 
 const navItems = [
   { key: "overview", label: "ภาพรวม", shortLabel: "ภาพรวม", icon: "grid" },
   { key: "upload", label: "อัปโหลดสลิป", shortLabel: "อัปโหลด", icon: "upload" },
   { key: "history", label: "ประวัติรายการ", shortLabel: "ประวัติ", icon: "list" },
   { key: "installments", label: "ผ่อนสินค้า", shortLabel: "ผ่อนสินค้า", icon: "card" },
+  { key: "debts", label: "ทวงหนี้", shortLabel: "ทวงหนี้", icon: "handCoins" },
   { key: "recurring", label: "รายจ่ายประจำ", shortLabel: "ประจำ", icon: "calendar" },
   { key: "subscriptions", label: "สมัครบริการ", shortLabel: "บริการ", icon: "calendar" },
   { key: "coach", label: "แนวทางการเงิน", shortLabel: "แนวทาง", icon: "sparkles" },
@@ -149,6 +156,15 @@ function loadSavedRecurringExpenses() {
   }
 }
 
+function loadSavedDebts() {
+  try {
+    const saved = window.localStorage.getItem("personal-finance-debts");
+    return saved ? JSON.parse(saved) : [];
+  } catch {
+    return [];
+  }
+}
+
 function defaultSubscriptionBillingDate() {
   const [year, month, day] = getTodayDate().split("-").map(Number);
   const firstOfNextMonth = new Date(Date.UTC(year, month, 1));
@@ -218,14 +234,18 @@ function App() {
   const [selectedMonth, setSelectedMonth] = useState(getCurrentMonthValue);
   const [transactions, setTransactions] = useState([]);
   const [installments, setInstallments] = useState([]);
+  const [debts, setDebts] = useState([]);
   const [subscriptions, setSubscriptions] = useState([]);
   const [recurringExpenses, setRecurringExpenses] = useState([]);
   const [customCategories, setCustomCategories] = useState(loadSavedCustomCategories);
   const [installmentMonth, setInstallmentMonth] = useState(currentInstallmentMonth);
   const [installmentSync, setInstallmentSync] = useState({ ready: false, error: "กำลังตรวจการเชื่อมต่อ" });
+  const [debtSync, setDebtSync] = useState({ ready: false, error: "กำลังตรวจการเชื่อมต่อ" });
   const [subscriptionSync, setSubscriptionSync] = useState({ ready: false, error: "กำลังตรวจการเชื่อมต่อ" });
   const [recurringExpenseSync, setRecurringExpenseSync] = useState({ ready: false, error: "กำลังตรวจการเชื่อมต่อ" });
   const [savingInstallment, setSavingInstallment] = useState(false);
+  const [savingDebt, setSavingDebt] = useState(false);
+  const [payingDebt, setPayingDebt] = useState("");
   const [savingRecurringExpense, setSavingRecurringExpense] = useState(false);
   const [updatingPayment, setUpdatingPayment] = useState("");
   const [paidCelebrationKey, setPaidCelebrationKey] = useState("");
@@ -319,9 +339,11 @@ function App() {
     function enterDemoMode() {
       setTransactions(loadSavedTransactions());
       setInstallments(loadSavedInstallments());
+      setDebts(loadSavedDebts());
       setSubscriptions(loadSavedSubscriptions());
       setRecurringExpenses(loadSavedRecurringExpenses());
       setInstallmentSync({ ready: false, error: "โหมดทดลองบันทึกข้อมูลเฉพาะอุปกรณ์นี้" });
+      setDebtSync({ ready: false, error: "โหมดทดลองบันทึกข้อมูลเฉพาะอุปกรณ์นี้" });
       setSubscriptionSync({ ready: false, error: "โหมดทดลองบันทึกข้อมูลเฉพาะอุปกรณ์นี้" });
       setRecurringExpenseSync({ ready: false, error: "โหมดทดลองบันทึกข้อมูลเฉพาะอุปกรณ์นี้" });
       setHiddenTransactions([]);
@@ -352,6 +374,16 @@ function App() {
       }
     }
   }, [installments, runtime.status, runtime.mode]);
+
+  useEffect(() => {
+    if (runtime.status === "ready" && runtime.mode === "local") {
+      try {
+        window.localStorage.setItem("personal-finance-debts", JSON.stringify(debts));
+      } catch {
+        setToast("พื้นที่เก็บข้อมูลรายการทวงหนี้ในอุปกรณ์นี้เต็ม");
+      }
+    }
+  }, [debts, runtime.status, runtime.mode]);
 
   useEffect(() => {
     if (runtime.status === "ready" && runtime.mode === "local") {
@@ -470,8 +502,9 @@ function App() {
     const [health, remoteTransactions] = await Promise.all([getGoogleStatus(), listTransactions()]);
     setTransactions(remoteTransactions.filter((item) => item.status !== "ลบแล้ว"));
     setHiddenTransactions(remoteTransactions.filter((item) => item.status === "ลบแล้ว"));
-    const [installmentResult, subscriptionResult, recurringExpenseResult, categoryResult] = await Promise.allSettled([
+    const [installmentResult, debtResult, subscriptionResult, recurringExpenseResult, categoryResult] = await Promise.allSettled([
       listGoogleInstallments(),
+      listGoogleDebts(),
       listGoogleSubscriptions(),
       listGoogleRecurringExpenses(),
       listGoogleCategories(),
@@ -485,6 +518,13 @@ function App() {
     } else {
       setInstallments([]);
       setInstallmentSync({ ready: false, error: installmentResult.reason?.message || "Apps Script ยังไม่รองรับข้อมูลผ่อนชำระ" });
+    }
+    if (debtResult.status === "fulfilled") {
+      setDebts(debtResult.value);
+      setDebtSync({ ready: true, error: "" });
+    } else {
+      setDebts([]);
+      setDebtSync({ ready: false, error: debtResult.reason?.message || "Apps Script ยังไม่รองรับรายการทวงหนี้" });
     }
     if (subscriptionResult.status === "fulfilled") {
       setSubscriptions(subscriptionResult.value);
@@ -526,9 +566,11 @@ function App() {
     setTransactions([]);
     setHiddenTransactions([]);
     setInstallments([]);
+    setDebts([]);
     setSubscriptions([]);
     setRecurringExpenses([]);
     setInstallmentSync({ ready: false, error: "กรุณาเข้าสู่ระบบเพื่อโหลดข้อมูลผ่อนชำระ" });
+    setDebtSync({ ready: false, error: "กรุณาเข้าสู่ระบบเพื่อโหลดรายการทวงหนี้" });
     setSubscriptionSync({ ready: false, error: "กรุณาเข้าสู่ระบบเพื่อโหลดข้อมูลสมัครบริการ" });
     setRecurringExpenseSync({ ready: false, error: "กรุณาเข้าสู่ระบบเพื่อโหลดรายจ่ายประจำ" });
     setShowSettings(false);
@@ -554,6 +596,17 @@ function App() {
       setInstallmentSync({ ready: true, error: "" });
     } catch (error) {
       setInstallmentSync({ ready: false, error: error.message || "Apps Script ยังไม่รองรับข้อมูลผ่อนชำระ" });
+    }
+  }
+
+  async function retryDebtSync() {
+    if (runtime.mode !== "google") return;
+    setDebtSync({ ready: false, error: "กำลังโหลดจาก Google Sheets" });
+    try {
+      setDebts(await listGoogleDebts());
+      setDebtSync({ ready: true, error: "" });
+    } catch (error) {
+      setDebtSync({ ready: false, error: error.message || "Apps Script ยังไม่รองรับรายการทวงหนี้" });
     }
   }
 
@@ -687,6 +740,108 @@ function App() {
     } finally {
       setUpdatingPayment("");
     }
+  }
+
+  async function createDebt(input) {
+    if (runtime.mode === "google" && !debtSync.ready) {
+      setToast("ยังบันทึกทวงหนี้ข้ามอุปกรณ์ไม่ได้ กรุณาอัปเดต Apps Script ก่อน");
+      return false;
+    }
+    let debtInput;
+    try {
+      debtInput = validateDebtInput({ ...input, id: input.id || makeDebtId() });
+    } catch (error) {
+      setToast(error.message || "ตรวจข้อมูลหนี้ไม่สำเร็จ");
+      return false;
+    }
+    setSavingDebt(true);
+    try {
+      const created = {
+        ...debtInput,
+        createdAt: new Date().toISOString(),
+        payments: [],
+      };
+      const saved = runtime.mode === "google" ? await saveGoogleDebt(created) : created;
+      setDebts((current) => [saved, ...current.filter((item) => item.id !== saved.id)]);
+      setToast(runtime.mode === "google" ? "บันทึกรายการทวงหนี้และหลักฐานลง Google Sheets/Drive แล้ว" : "บันทึกรายการทดลองไว้ในอุปกรณ์นี้แล้ว");
+      return true;
+    } catch (error) {
+      setToast(error.message || "บันทึกรายการทวงหนี้ไม่สำเร็จ · ลองใหม่ได้โดยไม่สร้างรายการซ้ำ");
+      return false;
+    } finally {
+      setSavingDebt(false);
+    }
+  }
+
+  async function recordDebtPayment(input) {
+    if (payingDebt) return false;
+    if (runtime.mode === "google" && !debtSync.ready) {
+      setToast("ยังบันทึกหลักฐานการชำระข้ามอุปกรณ์ไม่ได้ กรุณาอัปเดต Apps Script ก่อน");
+      return false;
+    }
+    const debt = debts.find((item) => item.id === input.id);
+    if (!debt) {
+      setToast("ไม่พบรายการทวงหนี้นี้แล้ว กรุณาโหลดรายการใหม่");
+      return false;
+    }
+    const busyKey = input.id + ":" + input.installmentNumber;
+    setPayingDebt(busyKey);
+    try {
+      let saved;
+      if (runtime.mode === "google") {
+        saved = await recordGoogleDebtPayment(input);
+      } else {
+        const summaryForDebt = summarizeDebt(debt);
+        const scheduled = summaryForDebt.schedule.find((item) => item.installmentNumber === input.installmentNumber);
+        if (!scheduled || scheduled.paid) throw new Error("งวดนี้บันทึกการชำระแล้ว");
+        const payment = {
+          installmentNumber: scheduled.installmentNumber,
+          paidAt: input.paidAt,
+          evidence: input.evidence,
+          signature: input.signature,
+          note: input.note || "",
+        };
+        const payments = [...(debt.payments || []), payment];
+        saved = {
+          ...debt,
+          payments,
+          schedule: buildDebtSchedule({ ...debt, payments }),
+        };
+        const summary = summarizeDebt(saved);
+        Object.assign(saved, {
+          totalAmount: summary.totalAmount,
+          paidAmount: summary.paidAmount,
+          remainingAmount: summary.remainingAmount,
+          paidCount: summary.paidCount,
+          complete: summary.complete,
+        });
+      }
+      setDebts((current) => current.map((item) => item.id === saved.id ? saved : item));
+      setToast(saved.complete ? "รับชำระครบแล้ว · เก็บหลักฐานและลายเซ็นไว้เรียบร้อย" : "บันทึกการชำระงวดนี้พร้อมหลักฐานแล้ว");
+      return true;
+    } catch (error) {
+      setToast(error.message || "บันทึกการชำระไม่สำเร็จ · ตรวจสอบการเชื่อมต่อแล้วลองอีกครั้ง");
+      return false;
+    } finally {
+      setPayingDebt("");
+    }
+  }
+
+  async function loadDebtEvidence(reference) {
+    if (runtime.mode === "google") return getGoogleDebtEvidencePreview(reference);
+    const debt = debts.find((item) => item.id === reference.id);
+    if (!debt) throw new Error("ไม่พบรายการทวงหนี้");
+    const payment = (debt.payments || []).find((item) => Number(item.installmentNumber) === Number(reference.installmentNumber));
+    let media = null;
+    if (reference.kind === "loan-photo") media = debt.loanEvidence?.[reference.index];
+    else if (reference.kind === "loan-signature") media = debt.lenderSignature;
+    else if (reference.kind === "payment-photo") media = payment?.evidence?.[reference.index];
+    else if (reference.kind === "payment-signature") media = payment?.signature;
+    if (!media?.base64) throw new Error("ไม่พบไฟล์หลักฐานในอุปกรณ์นี้");
+    const binary = atob(media.base64.replace(/^data:[^,]*,/, ""));
+    const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+    const blob = new Blob([bytes], { type: media.mimeType || "image/jpeg" });
+    return { url: URL.createObjectURL(blob), mimeType: blob.type };
   }
 
   function openUpload() {
@@ -1063,6 +1218,21 @@ function App() {
               onSettings={() => setShowSettings(true)}
             />
           )}
+          {activeView === "debts" && (
+            <DebtCollectionView
+              debts={debts}
+              storageMode={runtime.mode}
+              syncReady={debtSync.ready}
+              syncError={debtSync.error}
+              saving={savingDebt}
+              paying={payingDebt}
+              onRetrySync={retryDebtSync}
+              onCreate={createDebt}
+              onRecordPayment={recordDebtPayment}
+              onLoadEvidence={loadDebtEvidence}
+              onSettings={() => setShowSettings(true)}
+            />
+          )}
           {activeView === "subscriptions" && (
             <SubscriptionsView
               subscriptions={subscriptions}
@@ -1210,7 +1380,7 @@ function MobileNav({ activeView, onNavigate, onUpload }) {
   const quickAddButtonRef = useRef(null);
   const firstQuickAddActionRef = useRef(null);
   const primaryItems = navItems.filter((item) => ["overview", "history", "recurring"].includes(item.key));
-  const moreItems = navItems.filter((item) => ["installments", "subscriptions", "upload", "coach"].includes(item.key));
+  const moreItems = navItems.filter((item) => ["installments", "debts", "subscriptions", "upload", "coach"].includes(item.key));
   const moreActive = moreItems.some((item) => item.key === activeView);
 
   useEffect(() => {
@@ -1314,7 +1484,7 @@ function Topbar({ activeView, selectedMonth, monthChoices, connection, onMonthCh
         </button>
         <button className="icon-button settings-button" type="button" aria-label="ตั้งค่าและการเชื่อมต่อ" onClick={onSettings}><Icon name="settings" size={19} /></button>
       </div>
-      {activeView !== "installments" && (
+      {!["installments", "debts"].includes(activeView) && (
         <>
           <div className="month-control">
             <button className="icon-button small" aria-label="เดือนก่อนหน้า" disabled={monthIndex <= 0} onClick={() => onMonthChange(monthChoices[Math.max(0, monthIndex - 1)].value)}><Icon name="chevronLeft" size={18} /></button>

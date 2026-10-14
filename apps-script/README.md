@@ -35,6 +35,7 @@ Do not place the shared secret in browser code, a `VITE_*` variable, a public do
 - `restoreTransaction`: restores one hidden transaction and its saved status for the delete toast's Undo action.
 - `restoreInstallment` and `restoreSubscription`: clear the soft-delete timestamp for one plan or subscription.
 - `listRecurringExpenses`, `saveRecurringExpense`, `softDeleteRecurringExpense`, and `restoreRecurringExpense`: manage fixed monthly expenses in the `Recurring Expenses` tab, including their inclusive start/end months and undoable soft deletion.
+- `listDebts`, `saveDebt`, `recordDebtPayment`, and `getDebtEvidence`: track immutable loan records in `Debts` and append-only repayment proofs in `Debt Payments`. The script creates both tabs and a private `04_ทวงหนี้/DEBT-…` folder tree under the configured Drive folder automatically. Each loan stores up to three photos and an optional signature; each repayment stores up to three photos plus the required signature. There are no update or delete actions for these records.
 
 Rows hidden before this restore feature was added do not have a saved previous status, so restoring those rows sets their status to `ยืนยันแล้ว`.
 

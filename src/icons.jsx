@@ -1,6 +1,7 @@
 import { ArrowCounterClockwise } from "@phosphor-icons/react/ArrowCounterClockwise";
 import { BowlFood } from "@phosphor-icons/react/BowlFood";
 import { CalendarDots } from "@phosphor-icons/react/CalendarDots";
+import { Camera } from "@phosphor-icons/react/Camera";
 import { CaretLeft } from "@phosphor-icons/react/CaretLeft";
 import { CaretRight } from "@phosphor-icons/react/CaretRight";
 import { ChartLineUp } from "@phosphor-icons/react/ChartLineUp";
@@ -15,6 +16,7 @@ import { FunnelSimple } from "@phosphor-icons/react/FunnelSimple";
 import { GearSix } from "@phosphor-icons/react/GearSix";
 import { GraduationCap } from "@phosphor-icons/react/GraduationCap";
 import { House } from "@phosphor-icons/react/House";
+import { HandCoins } from "@phosphor-icons/react/HandCoins";
 import { Image } from "@phosphor-icons/react/Image";
 import { Info } from "@phosphor-icons/react/Info";
 import { Lightbulb } from "@phosphor-icons/react/Lightbulb";
@@ -34,6 +36,7 @@ import { Trash } from "@phosphor-icons/react/Trash";
 import { TrendDown } from "@phosphor-icons/react/TrendDown";
 import { TrendUp } from "@phosphor-icons/react/TrendUp";
 import { UploadSimple } from "@phosphor-icons/react/UploadSimple";
+import { User } from "@phosphor-icons/react/User";
 import { Wallet } from "@phosphor-icons/react/Wallet";
 import { X } from "@phosphor-icons/react/X";
 
@@ -50,6 +53,7 @@ const icons = {
   arrowUp: TrendUp,
   arrowDown: TrendDown,
   card: CreditCard,
+  handCoins: HandCoins,
   chart: ChartLineUp,
   check: Check,
   clock: Clock,
@@ -63,6 +67,9 @@ const icons = {
   info: Info,
   lightbulb: Lightbulb,
   image: Image,
+  camera: Camera,
+  user: User,
+  shield: ShieldCheck,
   plus: Plus,
   trash: Trash,
   food: BowlFood,

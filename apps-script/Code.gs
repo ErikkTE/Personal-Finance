@@ -4,11 +4,15 @@ const TAB_INSTALLMENT_PAYMENTS = "Installment Payments";
 const TAB_SUBSCRIPTIONS = "Subscriptions";
 const TAB_RECURRING_EXPENSES = "Recurring Expenses";
 const TAB_APP_CATEGORIES = "App Categories";
+const TAB_DEBTS = "Debts";
+const TAB_DEBT_PAYMENTS = "Debt Payments";
 const APP_CATEGORY_HEADERS = ["ขอบเขต", "หมวดหมู่", "วันที่สร้าง"];
 const INSTALLMENT_HEADERS = ["Installment ID", "รายการสินค้า", "ราคาสินค้า", "เงินดาวน์", "ดอกเบี้ยรวม (%)", "จำนวนเดือน", "ธนาคาร", "เดือนเริ่มชำระ", "ยอดรวม", "วันที่บันทึก", "ลบเมื่อ"];
 const INSTALLMENT_PAYMENT_HEADERS = ["Installment ID", "งวดที่", "เดือนครบกำหนด", "จำนวนเงิน", "ชำระแล้ว", "วันที่ชำระ"];
 const SUBSCRIPTION_HEADERS = ["Subscription ID", "ชื่อบริการ", "จำนวนเงิน", "รอบเรียกเก็บ", "วันเรียกเก็บครั้งถัดไป", "หมวดหมู่", "ช่องทางชำระ", "หมายเหตุ", "วันที่บันทึก", "ลบเมื่อ"];
 const RECURRING_EXPENSE_HEADERS = ["Recurring Expense ID", "ชื่อรายการ", "จำนวนเงินต่อเดือน", "หมวดหมู่", "วันที่ชำระ", "เดือนเริ่ม", "เดือนสิ้นสุด", "หมายเหตุ", "วันที่บันทึก", "ลบเมื่อ"];
+const DEBT_HEADERS = ["Debt ID", "ผู้ให้ยืม", "ผู้ยืม", "วันที่ยืม", "เงินต้น", "มีดอกเบี้ย", "ดอกเบี้ยรวม (%)", "จำนวนงวด", "ความสำคัญ", "หมายเหตุ", "รูปหลักฐานการยืม (JSON)", "ลายเซ็นผู้ยืม (JSON)", "วันที่บันทึก"];
+const DEBT_PAYMENT_HEADERS = ["Debt ID", "งวดที่", "วันครบกำหนด", "จำนวนเงิน", "วันที่ชำระ", "รูปหลักฐานการชำระ (JSON)", "ลายเซ็นผู้รับเงิน (JSON)", "หมายเหตุ", "Request ID"];
 const PREVIOUS_STATUS_HEADER = "สถานะก่อนซ่อน";
 const RESTORABLE_STATUSES = ["ยืนยันแล้ว", "รอตรวจสอบ"];
 const REQUIRED_HEADERS = [
@@ -58,6 +62,18 @@ function doPost(event) {
         break;
       case "listInstallments":
         data = { installments: listInstallments_() };
+        break;
+      case "listDebts":
+        data = { debts: listDebts_() };
+        break;
+      case "saveDebt":
+        data = saveDebt_(request.debt);
+        break;
+      case "recordDebtPayment":
+        data = recordDebtPayment_(request.payment, request.requestId);
+        break;
+      case "getDebtEvidence":
+        data = getDebtEvidence_(request.debtId, request.kind, request.index, request.installmentNumber);
         break;
       case "saveInstallment":
         data = saveInstallment_(request.installment);
@@ -115,6 +131,7 @@ function doPost(event) {
       requestId: String(request.requestId || "unknown"),
       transactionId: String(request.transaction && request.transaction.id || ""),
       installmentId: String(request.installment && request.installment.id || request.id || ""),
+      debtId: String(request.debt && request.debt.id || request.payment && request.payment.debtId || request.debtId || ""),
       recurringExpenseId: String(request.recurringExpense && request.recurringExpense.id || request.id || ""),
       message: String(error && error.message || "Request failed"),
       stack: String(error && error.stack || "").slice(0, 2000),
@@ -188,6 +205,420 @@ function getTransactionEvidence_(transactionId) {
     fileName: file.getName(),
     base64: Utilities.base64Encode(bytes),
   };
+}
+
+function listDebts_() {
+  const sheets = ensureDebtSheets_();
+  const debtSheet = sheets.debts;
+  const paymentSheet = sheets.payments;
+  const debtHeaders = debtSheet.getRange(1, 1, 1, debtSheet.getLastColumn()).getDisplayValues()[0];
+  const debtColumns = columnIndexes_(debtHeaders, DEBT_HEADERS, "Debts");
+  const paymentHeaders = paymentSheet.getRange(1, 1, 1, paymentSheet.getLastColumn()).getDisplayValues()[0];
+  const paymentColumns = columnIndexes_(paymentHeaders, DEBT_PAYMENT_HEADERS, "Debt Payments");
+  const paymentsByDebt = {};
+
+  if (paymentSheet.getLastRow() > 1) {
+    const paymentRows = paymentSheet.getRange(2, 1, paymentSheet.getLastRow() - 1, paymentHeaders.length).getValues();
+    paymentRows.forEach(function (row) {
+      const id = String(readCell_(row, paymentColumns, "Debt ID") || "");
+      if (!id) return;
+      if (!paymentsByDebt[id]) paymentsByDebt[id] = [];
+      paymentsByDebt[id].push({
+        installmentNumber: Number(readCell_(row, paymentColumns, "งวดที่") || 0),
+        paidAt: dateToIso_(readCell_(row, paymentColumns, "วันที่ชำระ")),
+        evidence: publicDebtEvidence_(parseDebtJson_(readCell_(row, paymentColumns, "รูปหลักฐานการชำระ (JSON)"), [])),
+        signature: publicDebtEvidence_(parseDebtJson_(readCell_(row, paymentColumns, "ลายเซ็นผู้รับเงิน (JSON)"), null)),
+        note: String(readCell_(row, paymentColumns, "หมายเหตุ") || ""),
+      });
+    });
+  }
+
+  if (debtSheet.getLastRow() < 2) return [];
+  const debtRows = debtSheet.getRange(2, 1, debtSheet.getLastRow() - 1, debtHeaders.length).getValues();
+  return debtRows.map(function (row) {
+    return debtFromRow_(row, debtColumns, paymentsByDebt[String(readCell_(row, debtColumns, "Debt ID") || "")] || []);
+  }).filter(function (debt) {
+    return Boolean(debt.id);
+  }).reverse();
+}
+
+function saveDebt_(input) {
+  const debt = validateDebt_(input);
+  const lock = LockService.getScriptLock();
+  lock.waitLock(15000);
+  try {
+    const sheets = ensureDebtSheets_();
+    const sheet = sheets.debts;
+    const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getDisplayValues()[0];
+    const columns = columnIndexes_(headers, DEBT_HEADERS, "Debts");
+    const existingRow = findInstallmentRow_(sheet, columns["Debt ID"], debt.id);
+    if (existingRow > 0) {
+      return { debt: getDebtById_(debt.id) };
+    }
+
+    const rootFolder = getDriveFolder_();
+    const debtFolder = getDebtFolder_(debt.id, rootFolder);
+    const loanFolder = getOrCreateEvidenceFolder_(debtFolder, "01_ตอนยืม");
+    const loanEvidence = debt.loanEvidence.map(function (item, index) {
+      return saveDebtMedia_(item, loanFolder, debt.id, "loan-photo-" + (index + 1), index);
+    });
+    const lenderSignature = debt.lenderSignature
+      ? saveDebtMedia_(debt.lenderSignature, loanFolder, debt.id, "loan-signature", 0)
+      : null;
+
+    const row = new Array(headers.length).fill("");
+    putCell_(row, columns, "Debt ID", debt.id);
+    putCell_(row, columns, "ผู้ให้ยืม", debt.lender);
+    putCell_(row, columns, "ผู้ยืม", debt.borrower);
+    putCell_(row, columns, "วันที่ยืม", debt.loanDate);
+    putCell_(row, columns, "เงินต้น", debt.principal);
+    putCell_(row, columns, "มีดอกเบี้ย", debt.hasInterest);
+    putCell_(row, columns, "ดอกเบี้ยรวม (%)", debt.interestRate);
+    putCell_(row, columns, "จำนวนงวด", debt.installments);
+    putCell_(row, columns, "ความสำคัญ", debt.priority);
+    putCell_(row, columns, "หมายเหตุ", debt.note);
+    putCell_(row, columns, "รูปหลักฐานการยืม (JSON)", JSON.stringify(loanEvidence));
+    putCell_(row, columns, "ลายเซ็นผู้ยืม (JSON)", lenderSignature ? JSON.stringify(lenderSignature) : "");
+    putCell_(row, columns, "วันที่บันทึก", new Date());
+    const rowNumber = Math.max(sheet.getLastRow() + 1, 2);
+    ensureSheetRowCapacity_(sheet, rowNumber);
+    sheet.getRange(rowNumber, 1, 1, row.length).setValues([row]);
+    return { debt: getDebtById_(debt.id) };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function recordDebtPayment_(input, requestId) {
+  const payment = validateDebtPayment_(input);
+  const lock = LockService.getScriptLock();
+  lock.waitLock(15000);
+  try {
+    const sheets = ensureDebtSheets_();
+    const debtSheet = sheets.debts;
+    const debtHeaders = debtSheet.getRange(1, 1, 1, debtSheet.getLastColumn()).getDisplayValues()[0];
+    const debtColumns = columnIndexes_(debtHeaders, DEBT_HEADERS, "Debts");
+    const debtRowNumber = findInstallmentRow_(debtSheet, debtColumns["Debt ID"], payment.debtId);
+    if (debtRowNumber < 2) throw new Error("Debt was not found");
+    const debtRow = debtSheet.getRange(debtRowNumber, 1, 1, debtHeaders.length).getValues()[0];
+    const debt = debtFromRow_(debtRow, debtColumns, []);
+    if (payment.paidAt < debt.loanDate) throw new Error("วันที่ชำระต้องไม่ก่อนวันที่ยืม");
+
+    const paymentSheet = sheets.payments;
+    const paymentHeaders = paymentSheet.getRange(1, 1, 1, paymentSheet.getLastColumn()).getDisplayValues()[0];
+    const paymentColumns = columnIndexes_(paymentHeaders, DEBT_PAYMENT_HEADERS, "Debt Payments");
+    const existingPaymentRow = findDebtPaymentRow_(paymentSheet, paymentColumns, payment.debtId, payment.installmentNumber);
+    if (existingPaymentRow > 0) return { debt: getDebtById_(payment.debtId) };
+
+    const schedule = buildDebtSchedule_(debt);
+    const scheduledPayment = schedule[payment.installmentNumber - 1];
+    if (!scheduledPayment) throw new Error("Debt installment was not found");
+    if (schedule.every(function (item) { return item.paid; })) throw new Error("Debt was already fully paid");
+
+    const rootFolder = getDriveFolder_();
+    const debtFolder = getDebtFolder_(payment.debtId, rootFolder);
+    const paymentFolder = getOrCreateEvidenceFolder_(debtFolder, "02_การชำระ");
+    const installmentFolder = getOrCreateEvidenceFolder_(paymentFolder, "งวด-" + String(payment.installmentNumber).padStart(3, "0"));
+    const evidence = payment.evidence.map(function (item, index) {
+      return saveDebtMedia_(item, installmentFolder, payment.debtId, "payment-" + payment.installmentNumber + "-photo-" + (index + 1), index);
+    });
+    const signature = saveDebtMedia_(payment.signature, installmentFolder, payment.debtId, "payment-" + payment.installmentNumber + "-signature", 0);
+    const row = new Array(paymentHeaders.length).fill("");
+    putCell_(row, paymentColumns, "Debt ID", payment.debtId);
+    putCell_(row, paymentColumns, "งวดที่", payment.installmentNumber);
+    putCell_(row, paymentColumns, "วันครบกำหนด", scheduledPayment.dueDate);
+    putCell_(row, paymentColumns, "จำนวนเงิน", scheduledPayment.amount);
+    putCell_(row, paymentColumns, "วันที่ชำระ", payment.paidAt);
+    putCell_(row, paymentColumns, "รูปหลักฐานการชำระ (JSON)", JSON.stringify(evidence));
+    putCell_(row, paymentColumns, "ลายเซ็นผู้รับเงิน (JSON)", JSON.stringify(signature));
+    putCell_(row, paymentColumns, "หมายเหตุ", payment.note);
+    putCell_(row, paymentColumns, "Request ID", String(requestId || ""));
+    const rowNumber = Math.max(paymentSheet.getLastRow() + 1, 2);
+    ensureSheetRowCapacity_(paymentSheet, rowNumber);
+    paymentSheet.getRange(rowNumber, 1, 1, row.length).setValues([row]);
+    return { debt: getDebtById_(payment.debtId) };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function getDebtEvidence_(debtId, kind, index, installmentNumber) {
+  const id = String(debtId || "").trim();
+  const evidenceKind = String(kind || "");
+  const evidenceIndex = Number(index || 0);
+  const number = Number(installmentNumber || 0);
+  if (!/^[A-Za-z0-9_-]{8,80}$/.test(id) || ["loan-photo", "loan-signature", "payment-photo", "payment-signature"].indexOf(evidenceKind) < 0) {
+    throw new Error("Debt evidence request is invalid");
+  }
+  const sheets = ensureDebtSheets_();
+  const debtSheet = sheets.debts;
+  const headers = debtSheet.getRange(1, 1, 1, debtSheet.getLastColumn()).getDisplayValues()[0];
+  const columns = columnIndexes_(headers, DEBT_HEADERS, "Debts");
+  const rowNumber = findInstallmentRow_(debtSheet, columns["Debt ID"], id);
+  if (rowNumber < 2) throw new Error("Debt was not found");
+  const row = debtSheet.getRange(rowNumber, 1, 1, headers.length).getValues()[0];
+  let metadata = null;
+  if (evidenceKind === "loan-photo") {
+    metadata = parseDebtJson_(readCell_(row, columns, "รูปหลักฐานการยืม (JSON)"), [])[evidenceIndex] || null;
+  } else if (evidenceKind === "loan-signature") {
+    metadata = parseDebtJson_(readCell_(row, columns, "ลายเซ็นผู้ยืม (JSON)"), null);
+  } else {
+    if (!Number.isInteger(number) || number < 1 || number > 120 || !Number.isInteger(evidenceIndex) || evidenceIndex < 0 || evidenceIndex > 2) {
+      throw new Error("Debt evidence request is invalid");
+    }
+    const paymentSheet = sheets.payments;
+    const paymentHeaders = paymentSheet.getRange(1, 1, 1, paymentSheet.getLastColumn()).getDisplayValues()[0];
+    const paymentColumns = columnIndexes_(paymentHeaders, DEBT_PAYMENT_HEADERS, "Debt Payments");
+    const paymentRowNumber = findDebtPaymentRow_(paymentSheet, paymentColumns, id, number);
+    if (paymentRowNumber < 2) throw new Error("Debt payment evidence was not found");
+    const paymentRow = paymentSheet.getRange(paymentRowNumber, 1, 1, paymentHeaders.length).getValues()[0];
+    metadata = evidenceKind === "payment-photo"
+      ? parseDebtJson_(readCell_(paymentRow, paymentColumns, "รูปหลักฐานการชำระ (JSON)"), [])[evidenceIndex] || null
+      : parseDebtJson_(readCell_(paymentRow, paymentColumns, "ลายเซ็นผู้รับเงิน (JSON)"), null);
+  }
+  if (!metadata || !metadata.fileId) throw new Error("Debt evidence was not found");
+
+  const rootFolder = getDriveFolder_();
+  let file;
+  try { file = DriveApp.getFileById(String(metadata.fileId)); } catch (ignored) { file = null; }
+  if (!file || !isDriveItemWithinFolderTree_(file, rootFolder)) throw new Error("Debt evidence is outside the configured Drive folder");
+  if (file.getSize() > 480000) throw new Error("Debt evidence file is too large");
+  const blob = file.getBlob();
+  const bytes = blob.getBytes();
+  const mimeType = String(blob.getContentType() || file.getMimeType() || "").toLowerCase();
+  if (bytes.length > 480000 || ["image/jpeg", "image/png", "image/webp"].indexOf(mimeType) < 0) {
+    throw new Error("Debt evidence file type is not supported");
+  }
+  return { mimeType: mimeType, fileName: file.getName(), base64: Utilities.base64Encode(bytes) };
+}
+
+function validateDebt_(input) {
+  if (!input || typeof input !== "object") throw new Error("Debt is required");
+  const id = String(input.id || "").trim();
+  const lender = String(input.lender || "").trim();
+  const borrower = String(input.borrower || "").trim();
+  const loanDate = String(input.loanDate || "");
+  const principal = Number(input.principal);
+  const hasInterest = input.hasInterest === true;
+  const interestRate = hasInterest ? Number(input.interestRate) : 0;
+  const installments = Number(input.installments);
+  const priority = String(input.priority || "");
+  const note = String(input.note || "").trim();
+  const validDate = function (value) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+    const parts = value.split("-").map(Number);
+    const date = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2]));
+    return date.getUTCFullYear() === parts[0] && date.getUTCMonth() === parts[1] - 1 && date.getUTCDate() === parts[2];
+  };
+  const today = Utilities.formatDate(new Date(), "Asia/Bangkok", "yyyy-MM-dd");
+  if (!/^[A-Za-z0-9_-]{8,80}$/.test(id) || !lender || lender.length > 100 || !borrower || borrower.length > 100) {
+    throw new Error("Debt identity is invalid");
+  }
+  if (!validDate(loanDate) || loanDate > today || !Number.isFinite(principal) || principal <= 0 || principal > 100000000) {
+    throw new Error("Debt date or principal is invalid");
+  }
+  if ((hasInterest && (!Number.isFinite(interestRate) || interestRate <= 0 || interestRate > 100)) ||
+    !Number.isInteger(installments) || installments < 1 || installments > 120 ||
+    ["high", "normal", "low"].indexOf(priority) < 0 || note.length > 500) {
+    throw new Error("Debt terms are invalid");
+  }
+  const loanEvidence = Array.isArray(input.loanEvidence) ? input.loanEvidence : [];
+  if (loanEvidence.length > 3) throw new Error("Debt accepts up to three photos");
+  loanEvidence.forEach(validateDebtMedia_);
+  const lenderSignature = input.lenderSignature ? validateDebtMedia_(input.lenderSignature, true) : null;
+  return {
+    id: id, lender: lender, borrower: borrower, loanDate: loanDate,
+    principal: Math.round(principal * 100) / 100,
+    hasInterest: hasInterest, interestRate: hasInterest ? interestRate : 0,
+    installments: installments, priority: priority, note: note,
+    loanEvidence: loanEvidence, lenderSignature: lenderSignature,
+  };
+}
+
+function validateDebtPayment_(input) {
+  if (!input || typeof input !== "object") throw new Error("Debt payment is required");
+  const debtId = String(input.debtId || "").trim();
+  const installmentNumber = Number(input.installmentNumber);
+  const paidAt = String(input.paidAt || "");
+  const note = String(input.note || "").trim();
+  const validDate = function (value) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+    const parts = value.split("-").map(Number);
+    const date = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2]));
+    return date.getUTCFullYear() === parts[0] && date.getUTCMonth() === parts[1] - 1 && date.getUTCDate() === parts[2];
+  };
+  const today = Utilities.formatDate(new Date(), "Asia/Bangkok", "yyyy-MM-dd");
+  const evidence = Array.isArray(input.evidence) ? input.evidence : [];
+  if (!/^[A-Za-z0-9_-]{8,80}$/.test(debtId) || !Number.isInteger(installmentNumber) || installmentNumber < 1 || installmentNumber > 120) {
+    throw new Error("Debt payment identity is invalid");
+  }
+  if (!validDate(paidAt) || paidAt > today || note.length > 300 || evidence.length < 1 || evidence.length > 3) {
+    throw new Error("Debt payment data is invalid");
+  }
+  evidence.forEach(validateDebtMedia_);
+  const signature = validateDebtMedia_(input.signature, true);
+  return { debtId: debtId, installmentNumber: installmentNumber, paidAt: paidAt, note: note, evidence: evidence, signature: signature };
+}
+
+function validateDebtMedia_(media, signatureOnly) {
+  if (!media || typeof media !== "object") throw new Error("Debt evidence is invalid");
+  const mimeType = String(media.mimeType || "").toLowerCase();
+  const base64 = String(media.base64 || "").replace(/^data:[^;]+;base64,/, "");
+  if (["image/jpeg", "image/png", "image/webp"].indexOf(mimeType) < 0 || (signatureOnly && mimeType !== "image/png") ||
+    !base64 || base64.length > 650000) {
+    throw new Error("Debt evidence image is not supported");
+  }
+  const bytes = Utilities.base64Decode(base64);
+  if (!bytes.length || bytes.length > 480000) throw new Error("Debt evidence must be 480 KB or smaller");
+  return {
+    fileName: String(media.fileName || "evidence-image").replace(/[\\/\u0000-\u001f]/g, "_").slice(0, 100),
+    mimeType: mimeType,
+    base64: base64,
+    bytes: bytes,
+  };
+}
+
+function saveDebtMedia_(media, folder, debtId, label, index) {
+  const safeId = String(debtId).replace(/[^A-Za-z0-9_-]/g, "_");
+  const originalName = String(media.fileName || "evidence-image").replace(/[\\/\u0000-\u001f]/g, "_").slice(0, 80);
+  const fileName = "DEBT-" + safeId + "-" + label + "-" + (index + 1) + "__" + originalName;
+  const matches = folder.getFilesByName(fileName);
+  let file = matches.hasNext() ? matches.next() : null;
+  if (!file) {
+    const prepared = media.bytes ? media : validateDebtMedia_(media, String(label).indexOf("signature") >= 0);
+    file = folder.createFile(Utilities.newBlob(prepared.bytes, prepared.mimeType, fileName));
+  }
+  return { fileId: file.getId(), fileName: file.getName(), mimeType: String(file.getMimeType()), index: index };
+}
+
+function getDebtFolder_(debtId, rootFolder) {
+  const parent = getOrCreateEvidenceFolder_(rootFolder, "04_ทวงหนี้");
+  return getOrCreateEvidenceFolder_(parent, "DEBT-" + String(debtId).replace(/[^A-Za-z0-9_-]/g, "_"));
+}
+
+function ensureDebtSheets_() {
+  const spreadsheet = getSpreadsheet_();
+  let debts = spreadsheet.getSheetByName(TAB_DEBTS);
+  let payments = spreadsheet.getSheetByName(TAB_DEBT_PAYMENTS);
+  if (!debts) debts = spreadsheet.insertSheet(TAB_DEBTS);
+  if (!payments) payments = spreadsheet.insertSheet(TAB_DEBT_PAYMENTS);
+  ensureTableHeaders_(debts, DEBT_HEADERS, "Debts");
+  ensureTableHeaders_(payments, DEBT_PAYMENT_HEADERS, "Debt Payments");
+  return { debts: debts, payments: payments };
+}
+
+function debtFromRow_(row, columns, payments) {
+  const debt = {
+    id: String(readCell_(row, columns, "Debt ID") || ""),
+    lender: String(readCell_(row, columns, "ผู้ให้ยืม") || ""),
+    borrower: String(readCell_(row, columns, "ผู้ยืม") || ""),
+    loanDate: dateToIso_(readCell_(row, columns, "วันที่ยืม")),
+    principal: Number(readCell_(row, columns, "เงินต้น") || 0),
+    hasInterest: readCell_(row, columns, "มีดอกเบี้ย") === true || String(readCell_(row, columns, "มีดอกเบี้ย")).toLowerCase() === "true",
+    interestRate: Number(readCell_(row, columns, "ดอกเบี้ยรวม (%)") || 0),
+    installments: Number(readCell_(row, columns, "จำนวนงวด") || 0),
+    priority: String(readCell_(row, columns, "ความสำคัญ") || "normal"),
+    note: String(readCell_(row, columns, "หมายเหตุ") || ""),
+    loanEvidence: publicDebtEvidence_(parseDebtJson_(readCell_(row, columns, "รูปหลักฐานการยืม (JSON)"), [])),
+    lenderSignature: publicDebtEvidence_(parseDebtJson_(readCell_(row, columns, "ลายเซ็นผู้ยืม (JSON)"), null)),
+    createdAt: dateToIso_(readCell_(row, columns, "วันที่บันทึก")),
+    payments: payments || [],
+  };
+  const schedule = buildDebtSchedule_(debt);
+  const totalAmount = debtAmount_(debt);
+  const paidAmount = Math.round(schedule.filter(function (item) { return item.paid; }).reduce(function (sum, item) { return sum + item.amount; }, 0) * 100) / 100;
+  debt.schedule = schedule;
+  debt.totalAmount = totalAmount;
+  debt.paidAmount = paidAmount;
+  debt.remainingAmount = Math.round((totalAmount - paidAmount) * 100) / 100;
+  debt.paidCount = schedule.filter(function (item) { return item.paid; }).length;
+  debt.complete = schedule.length > 0 && debt.paidCount === schedule.length;
+  return debt;
+}
+
+function buildDebtSchedule_(debt) {
+  const months = Number(debt.installments);
+  if (!months || months < 1 || months > 120 || !/^\d{4}-\d{2}-\d{2}$/.test(String(debt.loanDate || ""))) return [];
+  const totalCents = Math.round(debtAmount_(debt) * 100);
+  const regularCents = Math.floor(totalCents / months);
+  let remainingCents = totalCents;
+  const paidByNumber = {};
+  (debt.payments || []).forEach(function (payment) { paidByNumber[Number(payment.installmentNumber)] = payment; });
+  return Array.from({ length: months }, function (ignored, index) {
+    const installmentNumber = index + 1;
+    const amountCents = index === months - 1 ? remainingCents : regularCents;
+    remainingCents -= amountCents;
+    const parts = String(debt.loanDate).split("-").map(Number);
+    const dueFirst = new Date(Date.UTC(parts[0], parts[1] - 1 + installmentNumber, 1));
+    const dueYear = dueFirst.getUTCFullYear();
+    const dueMonth = dueFirst.getUTCMonth();
+    const dueDay = Math.min(parts[2], new Date(Date.UTC(dueYear, dueMonth + 1, 0)).getUTCDate());
+    const monthText = String(dueMonth + 1).padStart(2, "0");
+    const dueDate = String(dueYear) + "-" + monthText + "-" + String(dueDay).padStart(2, "0");
+    const payment = paidByNumber[installmentNumber];
+    return {
+      installmentNumber: installmentNumber,
+      month: String(dueYear) + "-" + monthText,
+      dueDate: dueDate,
+      amount: amountCents / 100,
+      paid: Boolean(payment),
+      paidAt: payment ? payment.paidAt : "",
+      evidence: payment ? payment.evidence : [],
+      signature: payment ? payment.signature : null,
+      note: payment ? payment.note : "",
+    };
+  });
+}
+
+function debtAmount_(debt) {
+  const principal = Number(debt.principal || 0);
+  const interestRate = debt.hasInterest ? Number(debt.interestRate || 0) : 0;
+  return Math.round((principal + principal * interestRate / 100) * 100) / 100;
+}
+
+function getDebtById_(id) {
+  const debt = listDebts_().filter(function (item) { return item.id === id; })[0];
+  if (!debt) throw new Error("Debt was not found after saving");
+  return debt;
+}
+
+function findDebtPaymentRow_(sheet, columns, debtId, installmentNumber) {
+  if (sheet.getLastRow() < 2) return -1;
+  const rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).getValues();
+  for (let index = 0; index < rows.length; index += 1) {
+    if (String(readCell_(rows[index], columns, "Debt ID") || "") === debtId &&
+      Number(readCell_(rows[index], columns, "งวดที่") || 0) === Number(installmentNumber)) return index + 2;
+  }
+  return -1;
+}
+
+function parseDebtJson_(value, fallback) {
+  if (value === null || value === undefined || value === "") return fallback;
+  try { return JSON.parse(String(value)); } catch (ignored) { return fallback; }
+}
+
+function publicDebtEvidence_(value) {
+  if (!value) return null;
+  const publicItem = function (item) {
+    return item ? { fileName: String(item.fileName || ""), mimeType: String(item.mimeType || ""), index: Number(item.index || 0) } : null;
+  };
+  return Array.isArray(value) ? value.map(publicItem).filter(Boolean) : publicItem(value);
+}
+
+function isDriveItemWithinFolderTree_(item, rootFolder) {
+  const pending = [item];
+  const seen = {};
+  let depth = 0;
+  while (pending.length && depth < 12) {
+    const current = pending.shift();
+    if (!current || seen[current.getId()]) continue;
+    seen[current.getId()] = true;
+    if (current.getId() === rootFolder.getId()) return true;
+    const parents = current.getParents();
+    while (parents.hasNext()) pending.push(parents.next());
+    depth += 1;
+  }
+  return false;
 }
 
 function listInstallments_() {
