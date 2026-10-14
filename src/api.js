@@ -201,3 +201,34 @@ export async function restoreSubscription(id) {
   if (!result?.restored) throw new Error("เซิร์ฟเวอร์ยืนยันการคืนบริการไม่สำเร็จ");
   return result;
 }
+
+export async function listRecurringExpenses() {
+  const result = await requestJson("/api/recurring-expenses");
+  if (!Array.isArray(result?.recurringExpenses)) throw new Error("รูปแบบข้อมูลรายจ่ายประจำจาก Google Sheets ไม่ถูกต้อง");
+  return result.recurringExpenses;
+}
+
+export async function saveRecurringExpense(expense) {
+  const result = await requestJson("/api/recurring-expenses", {
+    method: "POST",
+    body: JSON.stringify({ expense }),
+  });
+  if (!result?.recurringExpense) throw new Error("Google Sheets ไม่ได้ยืนยันการบันทึกรายจ่ายประจำ");
+  return result.recurringExpense;
+}
+
+export async function removeRecurringExpense(id) {
+  return requestJson("/api/recurring-expenses", {
+    method: "DELETE",
+    body: JSON.stringify({ id }),
+  });
+}
+
+export async function restoreRecurringExpense(id) {
+  const result = await requestJson("/api/recurring-expenses", {
+    method: "PATCH",
+    body: JSON.stringify({ id, restore: true }),
+  });
+  if (!result?.restored) throw new Error("เซิร์ฟเวอร์ยืนยันการคืนรายจ่ายประจำไม่สำเร็จ");
+  return result;
+}

@@ -58,3 +58,33 @@ Final result: passed
 - Root cause confirmed: `source-map-js@1.2.1` was selected under `Vite → PostCSS → source-map-js`; the vulnerable parser can block the Node.js event loop when given a crafted indexed source map.
 - Updated only the resolved transitive package in `package-lock.json` to patched `source-map-js@1.2.2`. The existing PostCSS semver range accepts the patched release, so no override or Vite upgrade was necessary; this security fix did not change `package.json`.
 - `npm explain source-map-js`: resolves to `1.2.2`. `npm audit --omit=dev`: 0 vulnerabilities. `npm run build`: passed. `git diff --check`: passed.
+
+## Responsive design QA — monthly commitments (Concept 3)
+
+Date: 2026-10-14
+Reference: `/Users/erik/.codex/generated_images/01a0f16a-1169-7710-9833-9f6327992be0/exec-f2442205-5fda-4d70-930a-7a71e111cc94.png` (853 × 1844)
+Preview: `http://localhost:4173/`
+
+### Visual and responsive review
+
+- Compared the live page with the selected reference: monthly total first, clear blue add action, then three color-coded groups for fixed expenses, installments, and services. Reused the existing wallet illustration and Phosphor icons to stay consistent with the app.
+- iPhone-sized 390 × 844 and iPhone Air target 420 × 912: groups stack in one column, the fixed bottom navigation remains visible, and the add action and expanded empty state remain reachable. Inputs remain 16 px to avoid Safari's automatic focus zoom; small mobile labels and end-term choices were enlarged for readability.
+- iPad portrait 834 × 1194: compact icon rail remains separate from the content; groups use a two-column grid and wrap cleanly.
+- Mac 1440 × 1000: labeled sidebar remains visible and the three groups fit in one row.
+- At all checked widths, `documentElement.scrollWidth` and `body.scrollWidth` matched the viewport; no horizontal overflow was observed.
+
+### Interaction and data checks
+
+- Accordion groups open and close accessibly; empty groups expose the relevant next action. The installment shortcut navigated to installment management and returned to the summary.
+- The fixed-expense form shows amount, category, due day, start month, and ongoing/end-month choices. Selecting an end month reveals the month field and inclusive duration; cancel closed the form without saving.
+- The current local demo state contains no commitment records. No fixture or test record was saved. Representative fixed-expense, installment, subscription, end-date, and paid-installment calculations are covered by the helper tests; the populated row layout was not visually exercised against live data in this pass.
+- Browser console showed no errors after loading the production build in the local Preview.
+
+### Verification
+
+- `npm test`: passed (4/4).
+- `npm run build`: passed.
+- `git diff --check`: passed.
+- The reference image and live browser screenshots were inspected during this session. The browser screenshots were not exported as standalone files.
+
+Final result: passed

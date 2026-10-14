@@ -34,6 +34,7 @@ Do not place the shared secret in browser code, a `VITE_*` variable, a public do
 - `restoreMonthTransactions`: restores every hidden row in the selected budget month and returns the refreshed transaction list.
 - `restoreTransaction`: restores one hidden transaction and its saved status for the delete toast's Undo action.
 - `restoreInstallment` and `restoreSubscription`: clear the soft-delete timestamp for one plan or subscription.
+- `listRecurringExpenses`, `saveRecurringExpense`, `softDeleteRecurringExpense`, and `restoreRecurringExpense`: manage fixed monthly expenses in the `Recurring Expenses` tab, including their inclusive start/end months and undoable soft deletion.
 
 Rows hidden before this restore feature was added do not have a saved previous status, so restoring those rows sets their status to `ยืนยันแล้ว`.
 

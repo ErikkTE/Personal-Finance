@@ -38,6 +38,10 @@ import {
   restoreInstallment as restoreGoogleInstallment,
   removeSubscription as removeGoogleSubscription,
   restoreSubscription as restoreGoogleSubscription,
+  listRecurringExpenses as listGoogleRecurringExpenses,
+  saveRecurringExpense as saveGoogleRecurringExpense,
+  removeRecurringExpense as removeGoogleRecurringExpense,
+  restoreRecurringExpense as restoreGoogleRecurringExpense,
   saveInstallment as saveGoogleInstallment,
   saveSubscription as saveGoogleSubscription,
   setInstallmentPayment as setGoogleInstallmentPayment,
@@ -46,12 +50,15 @@ import {
   signOut,
 } from "./api";
 import { readReceipt } from "./receipt-ocr";
+import RecurringExpensesView from "./RecurringExpensesView";
+import { recurringExpenseMonthValues, summarizeFixedCommitments } from "./recurring-expenses";
 
 const navItems = [
   { key: "overview", label: "ภาพรวม", shortLabel: "ภาพรวม", icon: "grid" },
   { key: "upload", label: "อัปโหลดสลิป", shortLabel: "อัปโหลด", icon: "upload" },
   { key: "history", label: "ประวัติรายการ", shortLabel: "ประวัติ", icon: "list" },
   { key: "installments", label: "ผ่อนสินค้า", shortLabel: "ผ่อนสินค้า", icon: "card" },
+  { key: "recurring", label: "รายจ่ายประจำ", shortLabel: "ประจำ", icon: "calendar" },
   { key: "subscriptions", label: "สมัครบริการ", shortLabel: "บริการ", icon: "calendar" },
   { key: "coach", label: "แนวทางการเงิน", shortLabel: "แนวทาง", icon: "sparkles" },
 ];
@@ -80,6 +87,15 @@ const subscriptionPaymentMethods = ["KBank", "SCB", "UOB", "บัตรเค�
 function loadSavedSubscriptions() {
   try {
     const saved = window.localStorage.getItem("personal-finance-subscriptions");
+    return saved ? JSON.parse(saved) : [];
+  } catch {
+    return [];
+  }
+}
+
+function loadSavedRecurringExpenses() {
+  try {
+    const saved = window.localStorage.getItem("personal-finance-recurring-expenses");
     return saved ? JSON.parse(saved) : [];
   } catch {
     return [];
@@ -156,10 +172,13 @@ function App() {
   const [transactions, setTransactions] = useState([]);
   const [installments, setInstallments] = useState([]);
   const [subscriptions, setSubscriptions] = useState([]);
+  const [recurringExpenses, setRecurringExpenses] = useState([]);
   const [installmentMonth, setInstallmentMonth] = useState(currentInstallmentMonth);
   const [installmentSync, setInstallmentSync] = useState({ ready: false, error: "กำลังตรวจการเชื่อมต่อ" });
   const [subscriptionSync, setSubscriptionSync] = useState({ ready: false, error: "กำลังตรวจการเชื่อมต่อ" });
+  const [recurringExpenseSync, setRecurringExpenseSync] = useState({ ready: false, error: "กำลังตรวจการเชื่อมต่อ" });
   const [savingInstallment, setSavingInstallment] = useState(false);
+  const [savingRecurringExpense, setSavingRecurringExpense] = useState(false);
   const [updatingPayment, setUpdatingPayment] = useState("");
   const [paidCelebrationKey, setPaidCelebrationKey] = useState("");
   const [hiddenTransactions, setHiddenTransactions] = useState([]);
@@ -252,8 +271,10 @@ function App() {
       setTransactions(loadSavedTransactions());
       setInstallments(loadSavedInstallments());
       setSubscriptions(loadSavedSubscriptions());
+      setRecurringExpenses(loadSavedRecurringExpenses());
       setInstallmentSync({ ready: false, error: "โหมดทดลองบันทึกข้อมูลเฉพาะอุปกรณ์นี้" });
       setSubscriptionSync({ ready: false, error: "โหมดทดลองบันทึกข้อมูลเฉพาะอุปกรณ์นี้" });
+      setRecurringExpenseSync({ ready: false, error: "โหมดทดลองบันทึกข้อมูลเฉพาะอุปกรณ์นี้" });
       setHiddenTransactions([]);
       setConnection({ mode: "local", state: "demo" });
       setRuntime({ status: "ready", mode: "local" });
@@ -294,6 +315,16 @@ function App() {
   }, [subscriptions, runtime.status, runtime.mode]);
 
   useEffect(() => {
+    if (runtime.status === "ready" && runtime.mode === "local") {
+      try {
+        window.localStorage.setItem("personal-finance-recurring-expenses", JSON.stringify(recurringExpenses));
+      } catch {
+        setToast("พื้นที่เก็บข้อมูลรายจ่ายประจำในอุปกรณ์นี้เต็ม");
+      }
+    }
+  }, [recurringExpenses, runtime.status, runtime.mode]);
+
+  useEffect(() => {
     if (!toast) return undefined;
     if (toastActionBusy) return undefined;
     const hasAction = toastAction?.message === toast;
@@ -305,9 +336,20 @@ function App() {
   }, [toast, toastAction, toastActionBusy]);
 
   const summary = useMemo(() => getSummary(transactions, selectedMonth), [transactions, selectedMonth]);
+  const fixedCommitmentSummary = useMemo(() => summarizeFixedCommitments({
+    fixedExpenses: recurringExpenses,
+    installments,
+    subscriptions,
+    month: selectedMonth,
+    subscriptionBillingDate,
+  }), [recurringExpenses, installments, subscriptions, selectedMonth]);
   const monthChoices = useMemo(
-    () => getMonthOptions(transactions, draft?.budgetMonth ? [draft.budgetMonth] : []),
-    [transactions, draft?.budgetMonth]
+    () => getMonthOptions(transactions, [
+      selectedMonth,
+      ...(draft?.budgetMonth ? [draft.budgetMonth] : []),
+      ...(activeView === "recurring" ? recurringExpenseMonthValues(recurringExpenses, getCurrentMonthValue()) : []),
+    ]),
+    [transactions, draft?.budgetMonth, selectedMonth, activeView, recurringExpenses]
   );
   const transactionNameOptions = useMemo(() => {
     const usage = new Map();
@@ -329,9 +371,10 @@ function App() {
     const [health, remoteTransactions] = await Promise.all([getGoogleStatus(), listTransactions()]);
     setTransactions(remoteTransactions.filter((item) => item.status !== "ลบแล้ว"));
     setHiddenTransactions(remoteTransactions.filter((item) => item.status === "ลบแล้ว"));
-    const [installmentResult, subscriptionResult] = await Promise.allSettled([
+    const [installmentResult, subscriptionResult, recurringExpenseResult] = await Promise.allSettled([
       listGoogleInstallments(),
       listGoogleSubscriptions(),
+      listGoogleRecurringExpenses(),
     ]);
     if (installmentResult.status === "fulfilled") {
       setInstallments(installmentResult.value.map(prepareInstallmentPlan));
@@ -346,6 +389,13 @@ function App() {
     } else {
       setSubscriptions([]);
       setSubscriptionSync({ ready: false, error: subscriptionResult.reason?.message || "Apps Script ยังไม่รองรับรายการสมัครบริการ" });
+    }
+    if (recurringExpenseResult.status === "fulfilled") {
+      setRecurringExpenses(recurringExpenseResult.value);
+      setRecurringExpenseSync({ ready: true, error: "" });
+    } else {
+      setRecurringExpenses([]);
+      setRecurringExpenseSync({ ready: false, error: recurringExpenseResult.reason?.message || "Apps Script ยังไม่รองรับรายจ่ายประจำ" });
     }
     setConnection({ mode: "google", state: "connected", ...health });
     setRuntime({ status: "ready", mode: "google" });
@@ -374,8 +424,10 @@ function App() {
     setHiddenTransactions([]);
     setInstallments([]);
     setSubscriptions([]);
+    setRecurringExpenses([]);
     setInstallmentSync({ ready: false, error: "กรุณาเข้าสู่ระบบเพื่อโหลดข้อมูลผ่อนชำระ" });
     setSubscriptionSync({ ready: false, error: "กรุณาเข้าสู่ระบบเพื่อโหลดข้อมูลสมัครบริการ" });
+    setRecurringExpenseSync({ ready: false, error: "กรุณาเข้าสู่ระบบเพื่อโหลดรายจ่ายประจำ" });
     setShowSettings(false);
     setConnection({ mode: "google", state: "locked" });
     setRuntime({ status: "login", mode: "google" });
@@ -410,6 +462,17 @@ function App() {
       setSubscriptionSync({ ready: true, error: "" });
     } catch (error) {
       setSubscriptionSync({ ready: false, error: error.message || "Apps Script ยังไม่รองรับรายการสมัครบริการ" });
+    }
+  }
+
+  async function retryRecurringExpenseSync() {
+    if (runtime.mode !== "google") return;
+    setRecurringExpenseSync({ ready: false, error: "กำลังโหลดจาก Google Sheets" });
+    try {
+      setRecurringExpenses(await listGoogleRecurringExpenses());
+      setRecurringExpenseSync({ ready: true, error: "" });
+    } catch (error) {
+      setRecurringExpenseSync({ ready: false, error: error.message || "Apps Script ยังไม่รองรับรายจ่ายประจำ" });
     }
   }
 
@@ -455,6 +518,31 @@ function App() {
       return false;
     } finally {
       setSavingInstallment(false);
+    }
+  }
+
+  async function saveRecurringExpense(input) {
+    if (runtime.mode === "google" && !recurringExpenseSync.ready) {
+      setToast("ยังบันทึกข้ามอุปกรณ์ไม่ได้ กรุณาอัปเดตและเผยแพร่ Apps Script ให้รองรับรายจ่ายประจำก่อน");
+      return false;
+    }
+    const existing = recurringExpenses.find((item) => item.id === input.id);
+    const expense = {
+      ...input,
+      id: input.id || globalThis.crypto?.randomUUID?.() || `FIXED-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      createdAt: existing?.createdAt || new Date().toISOString(),
+    };
+    setSavingRecurringExpense(true);
+    try {
+      const saved = runtime.mode === "google" ? await saveGoogleRecurringExpense(expense) : expense;
+      setRecurringExpenses((current) => [saved, ...current.filter((item) => item.id !== saved.id)]);
+      setToast(runtime.mode === "google" ? "บันทึกรายจ่ายประจำลง Google Sheets แล้ว" : "บันทึกรายจ่ายประจำไว้ในอุปกรณ์นี้แล้ว");
+      return true;
+    } catch (error) {
+      setToast(error.message || "บันทึกรายจ่ายประจำไม่สำเร็จ");
+      return false;
+    } finally {
+      setSavingRecurringExpense(false);
     }
   }
 
@@ -703,7 +791,9 @@ function App() {
       ? transactions.find((item) => item.id === target.id) || hiddenTransactions.find((item) => item.id === target.id)
       : target.type === "installment"
         ? installments.find((item) => item.id === target.id)
-        : subscriptions.find((item) => item.id === target.id);
+        : target.type === "subscription"
+          ? subscriptions.find((item) => item.id === target.id)
+          : recurringExpenses.find((item) => item.id === target.id);
     try {
       if (target.type === "transaction") {
         succeeded = await removeTransaction(target.id);
@@ -717,13 +807,19 @@ function App() {
         setSubscriptions((current) => current.filter((item) => item.id !== target.id));
         setSelectedSubscription(null);
         succeeded = true;
+      } else if (target.type === "recurringExpense") {
+        if (runtime.mode === "google") await removeGoogleRecurringExpense(target.id);
+        setRecurringExpenses((current) => current.filter((item) => item.id !== target.id));
+        succeeded = true;
       }
       if (succeeded) {
         const message = target.type === "transaction"
           ? runtime.mode === "google" ? "ซ่อนรายการจากแอปแล้ว · เก็บข้อมูลไว้ในชีต" : "ลบรายการทดลองออกจากเครื่องแล้ว"
           : target.type === "installment"
             ? runtime.mode === "google" ? "ซ่อนแผนผ่อนแล้ว" : "ลบแผนผ่อนออกจากอุปกรณ์นี้แล้ว"
-            : runtime.mode === "google" ? "ซ่อนบริการแล้ว" : "ลบบริการออกจากอุปกรณ์นี้แล้ว";
+            : target.type === "subscription"
+              ? runtime.mode === "google" ? "ซ่อนบริการแล้ว" : "ลบบริการออกจากอุปกรณ์นี้แล้ว"
+              : runtime.mode === "google" ? "ซ่อนรายจ่ายประจำแล้ว" : "ลบรายจ่ายประจำออกจากอุปกรณ์นี้แล้ว";
         setToastValue(message);
         setToastAction(deletedItem ? { type: target.type, item: deletedItem, message } : null);
       }
@@ -744,6 +840,7 @@ function App() {
         if (action.type === "transaction") await restoreGoogleTransaction(action.item.id);
         else if (action.type === "installment") await restoreGoogleInstallment(action.item.id);
         else if (action.type === "subscription") await restoreGoogleSubscription(action.item.id);
+        else if (action.type === "recurringExpense") await restoreGoogleRecurringExpense(action.item.id);
       }
 
       if (action.type === "transaction") {
@@ -754,6 +851,8 @@ function App() {
         setInstallments((current) => current.some((item) => item.id === action.item.id) ? current : [action.item, ...current]);
       } else if (action.type === "subscription") {
         setSubscriptions((current) => current.some((item) => item.id === action.item.id) ? current : [action.item, ...current]);
+      } else if (action.type === "recurringExpense") {
+        setRecurringExpenses((current) => current.some((item) => item.id === action.item.id) ? current : [action.item, ...current]);
       }
 
       setToastAction(null);
@@ -782,6 +881,11 @@ function App() {
     } catch (error) {
       setToast(error.message || "คืนรายการที่ซ่อนไม่สำเร็จ");
     }
+  }
+
+  function navigateFromOverview(view) {
+    if (view === "installments") setInstallmentMonth(selectedMonth);
+    setActiveView(view);
   }
 
   if (runtime.status === "checking" || runtime.status === "syncing") {
@@ -816,11 +920,10 @@ function App() {
             <Overview
               summary={summary}
               transactions={transactions}
-              installments={installments}
-              subscriptions={subscriptions}
+              commitments={fixedCommitmentSummary}
               selectedMonth={selectedMonth}
               onUpload={openUpload}
-              onNavigate={setActiveView}
+              onNavigate={navigateFromOverview}
               onSelectTransaction={openTransaction}
             />
           )}
@@ -865,6 +968,21 @@ function App() {
               onCreate={createSubscription}
               onSelect={setSelectedSubscription}
               onDelete={(subscription) => setDeleteTarget({ type: "subscription", id: subscription.id, name: subscription.name })}
+              onSettings={() => setShowSettings(true)}
+            />
+          )}
+          {activeView === "recurring" && (
+            <RecurringExpensesView
+              summary={fixedCommitmentSummary}
+              selectedMonth={selectedMonth}
+              storageMode={runtime.mode}
+              syncReady={recurringExpenseSync.ready}
+              syncError={recurringExpenseSync.error}
+              onRetrySync={retryRecurringExpenseSync}
+              saving={savingRecurringExpense}
+              onSave={saveRecurringExpense}
+              onDelete={(expense) => setDeleteTarget({ type: "recurringExpense", id: expense.id, name: expense.name })}
+              onNavigate={setActiveView}
               onSettings={() => setShowSettings(true)}
             />
           )}
@@ -978,8 +1096,8 @@ function MobileNav({ activeView, onNavigate, onUpload }) {
   const [quickAddOpen, setQuickAddOpen] = useState(false);
   const quickAddButtonRef = useRef(null);
   const firstQuickAddActionRef = useRef(null);
-  const primaryItems = navItems.filter((item) => ["overview", "history", "installments"].includes(item.key));
-  const moreItems = navItems.filter((item) => ["subscriptions", "upload", "coach"].includes(item.key));
+  const primaryItems = navItems.filter((item) => ["overview", "history", "recurring"].includes(item.key));
+  const moreItems = navItems.filter((item) => ["installments", "subscriptions", "upload", "coach"].includes(item.key));
   const moreActive = moreItems.some((item) => item.key === activeView);
 
   useEffect(() => {
@@ -1022,8 +1140,8 @@ function MobileNav({ activeView, onNavigate, onUpload }) {
         <button ref={quickAddButtonRef} className="mobile-add-button" type="button" onClick={() => { setMoreOpen(false); setQuickAddOpen(true); }} aria-label="เพิ่มรายการหรือจัดการรายการประจำ" aria-haspopup="dialog" aria-expanded={quickAddOpen}>
           <Icon name="plus" size={23} /><span>เพิ่ม</span>
         </button>
-        <button className={activeView === "installments" ? "active" : ""} type="button" onClick={() => onNavigate("installments")} aria-label="รายการผ่อนสินค้า" aria-current={activeView === "installments" ? "page" : undefined}>
-          <Icon name="card" size={20} /><span>ผ่อน</span>
+        <button className={activeView === "recurring" ? "active" : ""} type="button" onClick={() => onNavigate("recurring")} aria-label="รายจ่ายประจำ" aria-current={activeView === "recurring" ? "page" : undefined}>
+          <Icon name="calendar" size={20} /><span>ประจำ</span>
         </button>
         <div className="mobile-more-wrap">
           <button className={moreActive ? "active" : ""} type="button" aria-expanded={moreOpen} aria-controls="mobile-more-menu" onClick={() => setMoreOpen((open) => !open)} aria-label="เมนูเพิ่มเติม">
@@ -1057,6 +1175,9 @@ function MobileNav({ activeView, onNavigate, onUpload }) {
             </button>
             <button className="quick-add-option subscription" type="button" onClick={() => { closeQuickAdd(); onNavigate("subscriptions"); }}>
               <span className="quick-add-icon"><Icon name="calendar" size={20} /></span><span><strong>จัดการบริการรายเดือน</strong><small>เพิ่มบริการและดูรอบเรียกเก็บ</small></span><Icon name="chevronRight" size={17} />
+            </button>
+            <button className="quick-add-option recurring-fixed" type="button" onClick={() => { closeQuickAdd(); onNavigate("recurring"); }}>
+              <span className="quick-add-icon"><Icon name="home" size={20} /></span><span><strong>เพิ่มรายจ่ายคงที่</strong><small>ตั้งยอดและเดือนสิ้นสุดได้</small></span><Icon name="chevronRight" size={17} />
             </button>
           </div>
         </section>
@@ -1096,7 +1217,7 @@ function Topbar({ activeView, selectedMonth, monthChoices, connection, onMonthCh
   );
 }
 
-function Overview({ summary, transactions, installments, subscriptions, selectedMonth, onUpload, onNavigate, onSelectTransaction }) {
+function Overview({ summary, transactions, commitments, selectedMonth, onUpload, onNavigate, onSelectTransaction }) {
   const monthTransactions = summary.monthTransactions;
   return (
     <div className="page-stack overview-page-stack">
@@ -1128,7 +1249,7 @@ function Overview({ summary, transactions, installments, subscriptions, selected
 
       <section className="dashboard-lower">
         <div className="overview-side-stack">
-          <UpcomingPaymentPanel installments={installments} subscriptions={subscriptions} selectedMonth={selectedMonth} onNavigate={onNavigate} />
+          <UpcomingPaymentPanel commitments={commitments} selectedMonth={selectedMonth} onNavigate={onNavigate} />
           <button className="upload-banner overview-upload-banner" type="button" onClick={onUpload}>
             <div className="upload-banner-icon"><Icon name="upload" size={22} /></div>
             <div className="upload-banner-copy"><strong>เพิ่มสลิปหรือใบเสร็จ</strong><span>ตรวจข้อมูลก่อนบันทึก</span></div>
@@ -1146,31 +1267,22 @@ function Overview({ summary, transactions, installments, subscriptions, selected
   );
 }
 
-function UpcomingPaymentPanel({ installments, subscriptions, selectedMonth, onNavigate }) {
-  const dueInstallments = summarizeInstallments(installments, selectedMonth).dueThisMonth
-    .filter((payment) => !payment.paid)
-    .map((payment) => ({
-      key: `${payment.plan.id}:${payment.installmentNumber}`,
-      name: payment.plan.name,
-      source: `${installmentBanks.find((bank) => bank.value === payment.plan.bank)?.label || payment.plan.bank} · งวดที่ ${payment.installmentNumber}`,
-      sortDate: payment.month,
-      date: installmentMonthLabel(payment.month, { short: true }),
-      amount: payment.amount,
-      view: "installments",
-      icon: "card",
-    }));
-  const dueSubscriptions = subscriptions.map((subscription) => ({
-    key: subscription.id,
-    name: subscription.name,
-    source: `${subscription.category || "บริการ"} · ${subscription.paymentMethod || "ไม่ระบุช่องทาง"}`,
-    sortDate: subscriptionBillingDate(subscription, selectedMonth),
-    date: subscriptionBillingDate(subscription, selectedMonth),
-    amount: Number(subscription.amount || 0),
-    view: "subscriptions",
-    icon: "calendar",
-  })).filter((subscription) => subscription.date);
-  const dueItems = [...dueInstallments, ...dueSubscriptions].sort((left, right) => left.sortDate.localeCompare(right.sortDate));
-  const hasTrackedPlans = installments.length > 0 || subscriptions.length > 0;
+function UpcomingPaymentPanel({ commitments, selectedMonth, onNavigate }) {
+  const dueItems = commitments.entries.filter((entry) => !entry.paid).map((entry) => {
+    const view = entry.type === "fixed" ? "recurring" : entry.type === "subscription" ? "subscriptions" : "installments";
+    const icon = entry.type === "fixed" ? getTransactionIconDetails({ type: "expense", category: entry.category }).icon : entry.type === "subscription" ? "calendar" : "card";
+    return {
+      key: entry.id,
+      name: entry.name,
+      source: `${entry.category} · ${entry.detail}`,
+      sortDate: entry.dueDate || `${selectedMonth}-32`,
+      date: entry.dueDate ? `วันที่ ${Number(entry.dueDate.slice(-2))}` : installmentMonthLabel(selectedMonth, { short: true }),
+      amount: entry.amount,
+      view,
+      icon,
+    };
+  }).sort((left, right) => left.sortDate.localeCompare(right.sortDate));
+  const hasTrackedPlans = commitments.count > 0;
 
   return (
     <section className="panel upcoming-panel" aria-label="รายการที่คาดว่าจะชำระในเดือนนี้">
@@ -1181,8 +1293,8 @@ function UpcomingPaymentPanel({ installments, subscriptions, selectedMonth, onNa
           <span className="upcoming-copy"><strong>{item.name}</strong><small>{item.source}</small><small className="upcoming-date">{item.date}</small></span>
           <span className="upcoming-amount">฿ {formatNumber(item.amount)}</span>
         </button>)}
-        {dueItems.length > 5 && <button className="text-button upcoming-more" type="button" onClick={() => onNavigate("installments")}>ดูอีก {dueItems.length - 5} รายการ <Icon name="chevronRight" size={15} /></button>}
-      </div> : <div className="upcoming-empty"><span><Icon name={hasTrackedPlans ? "calendar" : "plus"} size={16} /></span><strong>{hasTrackedPlans ? "ไม่มีรายการครบกำหนดเดือนนี้" : "ยังไม่มีแผนชำระที่บันทึก"}</strong><small>{hasTrackedPlans ? "เลือกเดือนอื่นเพื่อดูรอบเรียกเก็บ" : "เพิ่มแผนผ่อนหรือบริการ เพื่อเห็นวันครบกำหนด"}</small><div><button className="text-button" type="button" onClick={() => onNavigate("installments")}>รายการผ่อน</button><button className="text-button" type="button" onClick={() => onNavigate("subscriptions")}>บริการรายเดือน</button></div></div>}
+        {dueItems.length > 5 && <button className="text-button upcoming-more" type="button" onClick={() => onNavigate("recurring")}>ดูอีก {dueItems.length - 5} รายการ <Icon name="chevronRight" size={15} /></button>}
+      </div> : <div className="upcoming-empty"><span><Icon name={hasTrackedPlans ? "calendar" : "plus"} size={16} /></span><strong>{hasTrackedPlans ? "ไม่มีรายการคงเหลือที่ต้องเตรียม" : "ยังไม่มีรายการประจำที่ติดตาม"}</strong><small>{hasTrackedPlans ? "อาจชำระครบแล้ว หรือเลือกเดือนอื่นเพื่อดูรายการ" : "เพิ่มบิลประจำ แผนผ่อน หรือบริการ เพื่อดูยอดรวม"}</small><div><button className="text-button" type="button" onClick={() => onNavigate("recurring")}>ดูรายจ่ายประจำ</button><button className="text-button" type="button" onClick={() => onNavigate("installments")}>เพิ่มแผนผ่อน</button></div></div>}
     </section>
   );
 }
@@ -1798,6 +1910,7 @@ function DeleteConfirmDialog({ target, storageMode, busy, onCancel, onConfirm })
     transaction: { type: "รายการธุรกรรม", detail: storageMode === "google" ? "รายการนี้จะถูกนำออกจากแอปและยอดสรุป ข้อมูลใน Google Sheets ยังคงอยู่ และกู้คืนได้จากหน้าประวัติ" : "รายการนี้จะถูกลบออกจากข้อมูลบนอุปกรณ์นี้" },
     installment: { type: "แผนผ่อน", detail: storageMode === "google" ? "แผนนี้และกำหนดชำระจะถูกนำออกจากแอป ข้อมูลใน Google Sheets ยังคงอยู่เป็นประวัติ" : "แผนและกำหนดชำระนี้จะถูกลบออกจากอุปกรณ์นี้" },
     subscription: { type: "รายการสมัครบริการ", detail: storageMode === "google" ? "บริการนี้จะถูกนำออกจากรายการและยอดสรุป ข้อมูลใน Google Sheets ยังคงอยู่เป็นประวัติ" : "บริการนี้จะถูกลบออกจากรายการบนอุปกรณ์นี้" },
+    recurringExpense: { type: "รายจ่ายประจำ", detail: storageMode === "google" ? "รายการนี้จะถูกซ่อนจากสรุปเดือน ข้อมูลใน Google Sheets ยังเก็บไว้และกู้คืนได้ด้วยปุ่มเลิกทำ" : "รายการนี้จะถูกนำออกจากข้อมูลรายจ่ายประจำบนอุปกรณ์นี้" },
   }[target.type] || { type: "รายการ", detail: "รายการนี้จะถูกนำออกจากแอป" };
   return (
     <div className="modal-backdrop delete-confirm-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !busy && onCancel()}>
