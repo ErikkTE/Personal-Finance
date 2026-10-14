@@ -2,9 +2,11 @@ const TAB_TRANSACTIONS = "Transactions";
 const TAB_INSTALLMENTS = "Installments";
 const TAB_INSTALLMENT_PAYMENTS = "Installment Payments";
 const TAB_SUBSCRIPTIONS = "Subscriptions";
+const TAB_RECURRING_EXPENSES = "Recurring Expenses";
 const INSTALLMENT_HEADERS = ["Installment ID", "รายการสินค้า", "ราคาสินค้า", "เงินดาวน์", "ดอกเบี้ยรวม (%)", "จำนวนเดือน", "ธนาคาร", "เดือนเริ่มชำระ", "ยอดรวม", "วันที่บันทึก", "ลบเมื่อ"];
 const INSTALLMENT_PAYMENT_HEADERS = ["Installment ID", "งวดที่", "เดือนครบกำหนด", "จำนวนเงิน", "ชำระแล้ว", "วันที่ชำระ"];
 const SUBSCRIPTION_HEADERS = ["Subscription ID", "ชื่อบริการ", "จำนวนเงิน", "รอบเรียกเก็บ", "วันเรียกเก็บครั้งถัดไป", "หมวดหมู่", "ช่องทางชำระ", "หมายเหตุ", "วันที่บันทึก", "ลบเมื่อ"];
+const RECURRING_EXPENSE_HEADERS = ["Recurring Expense ID", "ชื่อรายการ", "จำนวนเงินต่อเดือน", "หมวดหมู่", "วันที่ชำระ", "เดือนเริ่ม", "เดือนสิ้นสุด", "หมายเหตุ", "วันที่บันทึก", "ลบเมื่อ"];
 const PREVIOUS_STATUS_HEADER = "สถานะก่อนซ่อน";
 const RESTORABLE_STATUSES = ["ยืนยันแล้ว", "รอตรวจสอบ"];
 const REQUIRED_HEADERS = [
@@ -79,6 +81,18 @@ function doPost(event) {
       case "restoreSubscription":
         data = restoreSubscription_(request.id);
         break;
+      case "listRecurringExpenses":
+        data = { recurringExpenses: listRecurringExpenses_() };
+        break;
+      case "saveRecurringExpense":
+        data = saveRecurringExpense_(request.recurringExpense);
+        break;
+      case "softDeleteRecurringExpense":
+        data = softDeleteRecurringExpense_(request.id);
+        break;
+      case "restoreRecurringExpense":
+        data = restoreRecurringExpense_(request.id);
+        break;
       case "softDeleteTransaction":
         data = softDeleteTransaction_(request.id);
         break;
@@ -93,6 +107,7 @@ function doPost(event) {
       requestId: String(request.requestId || "unknown"),
       transactionId: String(request.transaction && request.transaction.id || ""),
       installmentId: String(request.installment && request.installment.id || request.id || ""),
+      recurringExpenseId: String(request.recurringExpense && request.recurringExpense.id || request.id || ""),
       message: String(error && error.message || "Request failed"),
       stack: String(error && error.stack || "").slice(0, 2000),
     };
@@ -372,6 +387,131 @@ function ensureSubscriptionsSheet_() {
   let sheet = spreadsheet.getSheetByName(TAB_SUBSCRIPTIONS);
   if (!sheet) sheet = spreadsheet.insertSheet(TAB_SUBSCRIPTIONS);
   ensureTableHeaders_(sheet, SUBSCRIPTION_HEADERS, "Subscriptions");
+  return sheet;
+}
+
+function listRecurringExpenses_() {
+  const sheet = ensureRecurringExpensesSheet_();
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return [];
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getDisplayValues()[0];
+  const columns = columnIndexes_(headers, RECURRING_EXPENSE_HEADERS, "Recurring Expenses");
+  return sheet.getRange(2, 1, lastRow - 1, headers.length).getValues().map(function (row) {
+    return recurringExpenseFromRow_(row, columns);
+  }).filter(function (item) {
+    return Boolean(item.id) && !item.deletedAt;
+  }).reverse();
+}
+
+function saveRecurringExpense_(input) {
+  if (!input || typeof input !== "object") throw new Error("Recurring expense is required");
+  const id = String(input.id || "").trim();
+  const name = String(input.name || "").trim().slice(0, 120);
+  const amount = Number(input.amount);
+  const category = String(input.category || "อื่นๆ").trim();
+  const dueDay = Number(input.dueDay);
+  const startMonth = String(input.startMonth || "");
+  const endMonth = String(input.endMonth || "");
+  const note = String(input.note || "").trim().slice(0, 500);
+  const categories = ["บ้านและที่พัก", "สาธารณูปโภค", "ประกัน", "สุขภาพ", "การศึกษา", "อื่นๆ"];
+  const validMonth = function (value) { return /^\d{4}-(0[1-9]|1[0-2])$/.test(value); };
+  if (!/^[A-Za-z0-9_-]{8,80}$/.test(id) || !name || !Number.isFinite(amount) || amount <= 0 || amount > 100000000) {
+    throw new Error("Recurring expense data is invalid");
+  }
+  if (categories.indexOf(category) < 0 || !Number.isInteger(dueDay) || dueDay < 1 || dueDay > 31) {
+    throw new Error("Recurring expense category or due day is invalid");
+  }
+  if (!validMonth(startMonth) || (endMonth && (!validMonth(endMonth) || endMonth < startMonth))) {
+    throw new Error("Recurring expense month range is invalid");
+  }
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(15000);
+  try {
+    const sheet = ensureRecurringExpensesSheet_();
+    const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getDisplayValues()[0];
+    const columns = columnIndexes_(headers, RECURRING_EXPENSE_HEADERS, "Recurring Expenses");
+    const existingRow = findInstallmentRow_(sheet, columns["Recurring Expense ID"], id);
+    const rowNumber = existingRow > 0 ? existingRow : Math.max(sheet.getLastRow() + 1, 2);
+    ensureSheetRowCapacity_(sheet, rowNumber);
+    const row = existingRow > 0
+      ? sheet.getRange(rowNumber, 1, 1, headers.length).getValues()[0]
+      : new Array(headers.length).fill("");
+    putCell_(row, columns, "Recurring Expense ID", id);
+    putCell_(row, columns, "ชื่อรายการ", name);
+    putCell_(row, columns, "จำนวนเงินต่อเดือน", amount);
+    putCell_(row, columns, "หมวดหมู่", category);
+    putCell_(row, columns, "วันที่ชำระ", dueDay);
+    putCell_(row, columns, "เดือนเริ่ม", startMonth);
+    putCell_(row, columns, "เดือนสิ้นสุด", endMonth);
+    putCell_(row, columns, "หมายเหตุ", note);
+    if (!existingRow) putCell_(row, columns, "วันที่บันทึก", new Date());
+    putCell_(row, columns, "ลบเมื่อ", "");
+    sheet.getRange(rowNumber, 1, 1, row.length).setValues([row]);
+    const saved = listRecurringExpenses_().filter(function (item) { return item.id === id; })[0];
+    if (!saved) throw new Error("Recurring expense was not found after saving");
+    return { recurringExpense: saved };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function softDeleteRecurringExpense_(id) {
+  const expenseId = String(id || "").trim();
+  if (!/^[A-Za-z0-9_-]{8,80}$/.test(expenseId)) throw new Error("Recurring expense ID is invalid");
+  const lock = LockService.getScriptLock();
+  lock.waitLock(15000);
+  try {
+    const sheet = ensureRecurringExpensesSheet_();
+    const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getDisplayValues()[0];
+    const columns = columnIndexes_(headers, RECURRING_EXPENSE_HEADERS, "Recurring Expenses");
+    const rowNumber = findInstallmentRow_(sheet, columns["Recurring Expense ID"], expenseId);
+    if (rowNumber < 2) throw new Error("Recurring expense was not found");
+    sheet.getRange(rowNumber, columns["ลบเมื่อ"] + 1).setValue(new Date());
+    return { ok: true, id: expenseId, deleted: true };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function restoreRecurringExpense_(id) {
+  const expenseId = String(id || "").trim();
+  if (!/^[A-Za-z0-9_-]{8,80}$/.test(expenseId)) throw new Error("Recurring expense ID is invalid");
+  const lock = LockService.getScriptLock();
+  lock.waitLock(15000);
+  try {
+    const sheet = ensureRecurringExpensesSheet_();
+    const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getDisplayValues()[0];
+    const columns = columnIndexes_(headers, RECURRING_EXPENSE_HEADERS, "Recurring Expenses");
+    const rowNumber = findInstallmentRow_(sheet, columns["Recurring Expense ID"], expenseId);
+    if (rowNumber < 2) throw new Error("Recurring expense was not found");
+    sheet.getRange(rowNumber, columns["ลบเมื่อ"] + 1).clearContent();
+    return { ok: true, id: expenseId, restored: true };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function recurringExpenseFromRow_(row, columns) {
+  return {
+    id: String(readCell_(row, columns, "Recurring Expense ID") || ""),
+    name: String(readCell_(row, columns, "ชื่อรายการ") || ""),
+    amount: Number(readCell_(row, columns, "จำนวนเงินต่อเดือน") || 0),
+    category: String(readCell_(row, columns, "หมวดหมู่") || "อื่นๆ"),
+    dueDay: Number(readCell_(row, columns, "วันที่ชำระ") || 1),
+    startMonth: String(readCell_(row, columns, "เดือนเริ่ม") || ""),
+    endMonth: String(readCell_(row, columns, "เดือนสิ้นสุด") || ""),
+    note: String(readCell_(row, columns, "หมายเหตุ") || ""),
+    createdAt: dateToIso_(readCell_(row, columns, "วันที่บันทึก")),
+    deletedAt: dateToIso_(readCell_(row, columns, "ลบเมื่อ")),
+  };
+}
+
+function ensureRecurringExpensesSheet_() {
+  const spreadsheet = getSpreadsheet_();
+  let sheet = spreadsheet.getSheetByName(TAB_RECURRING_EXPENSES);
+  if (!sheet) sheet = spreadsheet.insertSheet(TAB_RECURRING_EXPENSES);
+  ensureTableHeaders_(sheet, RECURRING_EXPENSE_HEADERS, "Recurring Expenses");
   return sheet;
 }
 

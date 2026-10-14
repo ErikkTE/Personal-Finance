@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite --configLoader native",
     "build": "vite build --configLoader native",
-    "preview": "vite preview --configLoader native"
+    "preview": "vite preview --configLoader native",
+    "test": "node --test"
   },
   "dependencies": {
     "@phosphor-icons/react": "^2.1.10",
