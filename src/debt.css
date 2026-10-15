@@ -102,7 +102,7 @@
 .debt-dialog-mark.repayment { color: #24845d; background: #e7f7ed; }
 .debt-dialog-mark.cancel { color: #b34f48; background: #fff0ee; }
 .debt-create-dialog form,.debt-repayment-dialog form,.debt-event-dialog form { min-height: 0; display: flex; flex: 1; flex-direction: column; }
-.debt-create-body,.debt-create-review,.debt-repayment-body,.debt-detail-body,.debt-proof-body { min-height: 0; overflow: auto; overscroll-behavior: contain; }
+.debt-create-body,.debt-create-review,.debt-repayment-body,.debt-detail-body,.debt-proof-body { min-height: 0; overflow: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
 .debt-create-body { display: grid; gap: 17px; padding: 18px 22px; }
 .debt-form-section { display: grid; gap: 12px; }
 .debt-section-heading { display: flex; align-items: center; gap: 10px; }
@@ -434,6 +434,10 @@
   .debt-row-person { gap: 7px; }
   .debt-row-amount { font-size: 9px; }
   .debt-status-chip,.debt-priority-chip { font-size: 7px; }
+}
+
+@media (hover: none), (pointer: coarse) {
+  .debt-field input,.debt-field select,.debt-field textarea { font-size: 16px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

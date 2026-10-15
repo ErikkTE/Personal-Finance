@@ -15,6 +15,50 @@ const debtCorrectionLabels = {
   priority: "ความสำคัญ", note: "หมายเหตุ",
 };
 
+function useDebtModalScrollLock(locked) {
+  useEffect(() => {
+    if (!locked) return undefined;
+
+    const html = document.documentElement;
+    const body = document.body;
+    const scrollY = window.scrollY;
+    const previousStyles = {
+      htmlOverflow: html.style.overflow,
+      htmlOverscrollBehavior: html.style.overscrollBehavior,
+      bodyPosition: body.style.position,
+      bodyTop: body.style.top,
+      bodyLeft: body.style.left,
+      bodyRight: body.style.right,
+      bodyWidth: body.style.width,
+      bodyOverflow: body.style.overflow,
+      bodyOverscrollBehavior: body.style.overscrollBehavior,
+    };
+
+    html.style.overflow = "hidden";
+    html.style.overscrollBehavior = "none";
+    body.style.position = "fixed";
+    body.style.top = `-${scrollY}px`;
+    body.style.left = "0";
+    body.style.right = "0";
+    body.style.width = "100%";
+    body.style.overflow = "hidden";
+    body.style.overscrollBehavior = "none";
+
+    return () => {
+      html.style.overflow = previousStyles.htmlOverflow;
+      html.style.overscrollBehavior = previousStyles.htmlOverscrollBehavior;
+      body.style.position = previousStyles.bodyPosition;
+      body.style.top = previousStyles.bodyTop;
+      body.style.left = previousStyles.bodyLeft;
+      body.style.right = previousStyles.bodyRight;
+      body.style.width = previousStyles.bodyWidth;
+      body.style.overflow = previousStyles.bodyOverflow;
+      body.style.overscrollBehavior = previousStyles.bodyOverscrollBehavior;
+      window.scrollTo(0, scrollY);
+    };
+  }, [locked]);
+}
+
 function thaiMoney(value) {
   return "฿" + formatNumber(value);
 }
@@ -567,13 +611,19 @@ function DebtEventDialog({ debt, type, saving, onClose, onSubmit }) {
 
   async function submit(event) {
     event.preventDefault();
+    if (saving) return;
     if (note.trim().length < 3) {
       setError("กรุณาเขียนเหตุผลอย่างน้อย 3 ตัวอักษร");
       return;
     }
     setError("");
-    const saved = await onSubmit({ eventId, debtId: debt.id, type, referenceId: debt.id, note });
-    if (saved) onClose();
+    try {
+      const saved = await onSubmit({ eventId, debtId: debt.id, type, referenceId: debt.id, note });
+      if (saved) onClose();
+      else setError("บันทึกไม่สำเร็จ กรุณาลองอีกครั้ง");
+    } catch (submitError) {
+      setError(submitError.message || "บันทึกไม่สำเร็จ กรุณาตรวจการเชื่อมต่อแล้วลองอีกครั้ง");
+    }
   }
 
   return (
@@ -587,8 +637,8 @@ function DebtEventDialog({ debt, type, saving, onClose, onSubmit }) {
           <div className="debt-repayment-body">
               <div className={"debt-event-warning" + (cancellation ? " cancel" : "")}><Icon name={cancellation ? "info" : "shield"} size={18} /><span>{cancellation ? "ระบบจะเก็บข้อมูลต้นฉบับไว้ และติดป้ายว่ายกเลิก รายการที่รับชำระแล้วไม่สามารถยกเลิกได้" : "บันทึกนี้จะผูกกับรายการเดิมและแก้ย้อนหลังไม่ได้ หากข้อมูลหลักผิด ให้ใช้ปุ่มแก้ไขรายการเพื่อเก็บค่าเดิมและค่าใหม่ในประวัติ"}</span></div>
             <div className="debt-repayment-receipt"><div><strong>{debt.borrower}</strong><small>รายการอ้างอิง {debt.id}</small></div><strong>{thaiMoney(debt.principal)}</strong><small>เงินต้นเดิม</small></div>
-            <label className="debt-field"><span>{cancellation ? "เหตุผลที่ยกเลิก" : "ข้อความชี้แจง"}</span><textarea value={note} onChange={(event) => setNote(event.target.value)} minLength="3" maxLength="500" required placeholder={cancellation ? "เช่น สร้างรายการซ้ำ หรือระบุยอดผิดและจะบันทึกรายการใหม่" : "ระบุสิ่งที่ต้องการชี้แจง โดยข้อมูลต้นฉบับจะยังอยู่"} /></label>
-            {error && <div className="debt-form-error" role="alert"><Icon name="info" size={17} />{error}</div>}
+            <label className="debt-field"><span>{cancellation ? "เหตุผลที่ยกเลิก" : "ข้อความชี้แจง"}</span><textarea value={note} onChange={(event) => { setNote(event.target.value); if (error) setError(""); }} minLength="3" maxLength="500" required aria-invalid={Boolean(error)} aria-describedby={error ? "debt-event-error" : undefined} placeholder={cancellation ? "เช่น สร้างรายการซ้ำ หรือระบุยอดผิดและจะบันทึกรายการใหม่" : "ระบุสิ่งที่ต้องการชี้แจง โดยข้อมูลต้นฉบับจะยังอยู่"} /></label>
+            {error && <div id="debt-event-error" className="debt-form-error" role="alert"><Icon name="info" size={17} />{error}</div>}
           </div>
           <footer className="debt-dialog-footer"><button className="secondary-button" type="button" onClick={onClose} disabled={saving}>กลับ</button><button className={cancellation ? "danger-button" : "primary-button debt-confirm-create"} type="submit" disabled={saving}>{saving ? "กำลังบันทึก…" : cancellation ? "ยืนยันยกเลิก" : "บันทึกชี้แจง"}</button></footer>
         </form>
@@ -895,6 +945,7 @@ export default function DebtCollectionView({ debts, storageMode, syncReady, sync
   const [lightbox, setLightbox] = useState(null);
 
   const selectedDebt = debts.find((debt) => debt.id === selectedDebtId) || null;
+  useDebtModalScrollLock(Boolean(createOpen || selectedDebt || proofPayment || lightbox));
   const today = getTodayDate();
   const currentMonth = getCurrentMonthValue();
   const summaryByDebtId = useMemo(() => new Map(debts.map((debt) => [debt.id, summarizeDebt(debt, today)])), [debts, today]);

@@ -817,15 +817,17 @@ function App() {
   }
 
   async function recordDebtEvent(input) {
-    if (savingDebt || payingDebt) return false;
+    if (savingDebt || payingDebt) throw new Error("มีรายการทวงหนี้กำลังบันทึกอยู่ กรุณารอสักครู่แล้วลองอีกครั้ง");
     if (runtime.mode === "google" && !debtSync.ready) {
-      setToast("ยังบันทึกประวัติข้ามอุปกรณ์ไม่ได้ กรุณาตรวจการเชื่อมต่อ Google Sheets ก่อน");
-      return false;
+      const message = "ยังบันทึกประวัติข้ามอุปกรณ์ไม่ได้ กรุณาตรวจการเชื่อมต่อ Google Sheets ก่อน";
+      setToast(message);
+      throw new Error(message);
     }
     const debt = debts.find((item) => item.id === input.debtId);
     if (!debt) {
-      setToast("ไม่พบรายการทวงหนี้นี้แล้ว กรุณาโหลดรายการใหม่");
-      return false;
+      const message = "ไม่พบรายการทวงหนี้นี้แล้ว กรุณาโหลดรายการใหม่";
+      setToast(message);
+      throw new Error(message);
     }
     setSavingDebt(true);
     try {
@@ -839,8 +841,9 @@ function App() {
       setToast(event.type === "cancellation" ? "บันทึกการยกเลิกพร้อมเหตุผลแล้ว · เก็บต้นฉบับไว้ในประวัติ" : event.type === "correction" ? "แก้ไขรายการแล้ว · เก็บรายละเอียดก่อนและหลังไว้ในประวัติ" : "เพิ่มบันทึกชี้แจงไว้กับรายการเดิมแล้ว");
       return true;
     } catch (error) {
-      setToast(error.message || "บันทึกประวัติไม่สำเร็จ");
-      return false;
+      const message = error.message || "บันทึกประวัติไม่สำเร็จ";
+      setToast(message);
+      throw new Error(message);
     } finally {
       setSavingDebt(false);
     }
