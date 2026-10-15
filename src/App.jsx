@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "./icons";
+import CategorySelect from "./CategorySelect";
 import {
   categoryOptions,
   channelOptions,
@@ -33,12 +34,18 @@ import {
   restoreHiddenTransactions as restoreGoogleHiddenTransactions,
   getEvidencePreview,
   listInstallments as listGoogleInstallments,
+  listDebts as listGoogleDebts,
+  saveDebt as saveGoogleDebt,
+  recordDebtPayment as recordGoogleDebtPayment,
+  getDebtEvidencePreview as getGoogleDebtEvidencePreview,
   listSubscriptions as listGoogleSubscriptions,
   removeInstallment as removeGoogleInstallment,
   restoreInstallment as restoreGoogleInstallment,
   removeSubscription as removeGoogleSubscription,
   restoreSubscription as restoreGoogleSubscription,
   listRecurringExpenses as listGoogleRecurringExpenses,
+  listCategories as listGoogleCategories,
+  saveCategory as saveGoogleCategory,
   saveRecurringExpense as saveGoogleRecurringExpense,
   removeRecurringExpense as removeGoogleRecurringExpense,
   restoreRecurringExpense as restoreGoogleRecurringExpense,
@@ -51,13 +58,16 @@ import {
 } from "./api";
 import { readReceipt } from "./receipt-ocr";
 import RecurringExpensesView from "./RecurringExpensesView";
-import { recurringExpenseMonthValues, summarizeFixedCommitments } from "./recurring-expenses";
+import { recurringExpenseCategories, recurringExpenseMonthValues, summarizeFixedCommitments } from "./recurring-expenses";
+import DebtCollectionView from "./DebtCollectionView";
+import { buildDebtSchedule, makeDebtId, summarizeDebt, validateDebtInput } from "./debts";
 
 const navItems = [
   { key: "overview", label: "ภาพรวม", shortLabel: "ภาพรวม", icon: "grid" },
   { key: "upload", label: "อัปโหลดสลิป", shortLabel: "อัปโหลด", icon: "upload" },
   { key: "history", label: "ประวัติรายการ", shortLabel: "ประวัติ", icon: "list" },
   { key: "installments", label: "ผ่อนสินค้า", shortLabel: "ผ่อนสินค้า", icon: "card" },
+  { key: "debts", label: "ทวงหนี้", shortLabel: "ทวงหนี้", icon: "handCoins" },
   { key: "recurring", label: "รายจ่ายประจำ", shortLabel: "ประจำ", icon: "calendar" },
   { key: "subscriptions", label: "สมัครบริการ", shortLabel: "บริการ", icon: "calendar" },
   { key: "coach", label: "แนวทางการเงิน", shortLabel: "แนวทาง", icon: "sparkles" },
@@ -82,7 +92,51 @@ function getTransactionIconDetails(transaction) {
 }
 
 const subscriptionCategories = ["บันเทิง", "ทำงาน", "พื้นที่เก็บข้อมูล", "สุขภาพ", "การศึกษา", "อื่นๆ"];
+const categoryDefaults = {
+  transactions: categoryOptions,
+  recurringExpenses: recurringExpenseCategories,
+  subscriptions: subscriptionCategories,
+};
 const subscriptionPaymentMethods = ["KBank", "SCB", "UOB", "บัตรเครดิตอื่นๆ", "Apple Pay", "Google Play", "อื่นๆ"];
+
+function normalizeCustomCategories(input) {
+  const seen = new Set();
+  const categories = [];
+  for (const item of Array.isArray(input) ? input : []) {
+    const scope = String(item?.scope || "");
+    const name = String(item?.name || "").trim();
+    const key = scope + ":" + name.toLocaleLowerCase();
+    if (!categoryDefaults[scope] || !name || name.length > 40 || seen.has(key)) continue;
+    seen.add(key);
+    categories.push({ scope, name, createdAt: String(item.createdAt || "") });
+  }
+  return categories;
+}
+
+function mergeCustomCategories(...sources) {
+  return normalizeCustomCategories(sources.flat());
+}
+
+function uniqueCategoryNames(...sources) {
+  const names = [];
+  const seen = new Set();
+  for (const value of sources.flat()) {
+    const name = String(value || "").trim();
+    const key = name.toLocaleLowerCase();
+    if (!name || seen.has(key)) continue;
+    seen.add(key);
+    names.push(name);
+  }
+  return names;
+}
+
+function loadSavedCustomCategories() {
+  try {
+    return normalizeCustomCategories(JSON.parse(window.localStorage.getItem("personal-finance-custom-categories") || "[]"));
+  } catch {
+    return [];
+  }
+}
 
 function loadSavedSubscriptions() {
   try {
@@ -96,6 +150,15 @@ function loadSavedSubscriptions() {
 function loadSavedRecurringExpenses() {
   try {
     const saved = window.localStorage.getItem("personal-finance-recurring-expenses");
+    return saved ? JSON.parse(saved) : [];
+  } catch {
+    return [];
+  }
+}
+
+function loadSavedDebts() {
+  try {
+    const saved = window.localStorage.getItem("personal-finance-debts");
     return saved ? JSON.parse(saved) : [];
   } catch {
     return [];
@@ -171,13 +234,18 @@ function App() {
   const [selectedMonth, setSelectedMonth] = useState(getCurrentMonthValue);
   const [transactions, setTransactions] = useState([]);
   const [installments, setInstallments] = useState([]);
+  const [debts, setDebts] = useState([]);
   const [subscriptions, setSubscriptions] = useState([]);
   const [recurringExpenses, setRecurringExpenses] = useState([]);
+  const [customCategories, setCustomCategories] = useState(loadSavedCustomCategories);
   const [installmentMonth, setInstallmentMonth] = useState(currentInstallmentMonth);
   const [installmentSync, setInstallmentSync] = useState({ ready: false, error: "กำลังตรวจการเชื่อมต่อ" });
+  const [debtSync, setDebtSync] = useState({ ready: false, error: "กำลังตรวจการเชื่อมต่อ" });
   const [subscriptionSync, setSubscriptionSync] = useState({ ready: false, error: "กำลังตรวจการเชื่อมต่อ" });
   const [recurringExpenseSync, setRecurringExpenseSync] = useState({ ready: false, error: "กำลังตรวจการเชื่อมต่อ" });
   const [savingInstallment, setSavingInstallment] = useState(false);
+  const [savingDebt, setSavingDebt] = useState(false);
+  const [payingDebt, setPayingDebt] = useState("");
   const [savingRecurringExpense, setSavingRecurringExpense] = useState(false);
   const [updatingPayment, setUpdatingPayment] = useState("");
   const [paidCelebrationKey, setPaidCelebrationKey] = useState("");
@@ -193,6 +261,7 @@ function App() {
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [selectedSubscription, setSelectedSubscription] = useState(null);
+  const [editingSubscription, setEditingSubscription] = useState(null);
   const [loginError, setLoginError] = useState("");
   const fileInputRef = useRef(null);
 
@@ -270,9 +339,11 @@ function App() {
     function enterDemoMode() {
       setTransactions(loadSavedTransactions());
       setInstallments(loadSavedInstallments());
+      setDebts(loadSavedDebts());
       setSubscriptions(loadSavedSubscriptions());
       setRecurringExpenses(loadSavedRecurringExpenses());
       setInstallmentSync({ ready: false, error: "โหมดทดลองบันทึกข้อมูลเฉพาะอุปกรณ์นี้" });
+      setDebtSync({ ready: false, error: "โหมดทดลองบันทึกข้อมูลเฉพาะอุปกรณ์นี้" });
       setSubscriptionSync({ ready: false, error: "โหมดทดลองบันทึกข้อมูลเฉพาะอุปกรณ์นี้" });
       setRecurringExpenseSync({ ready: false, error: "โหมดทดลองบันทึกข้อมูลเฉพาะอุปกรณ์นี้" });
       setHiddenTransactions([]);
@@ -307,6 +378,16 @@ function App() {
   useEffect(() => {
     if (runtime.status === "ready" && runtime.mode === "local") {
       try {
+        window.localStorage.setItem("personal-finance-debts", JSON.stringify(debts));
+      } catch {
+        setToast("พื้นที่เก็บข้อมูลรายการทวงหนี้ในอุปกรณ์นี้เต็ม");
+      }
+    }
+  }, [debts, runtime.status, runtime.mode]);
+
+  useEffect(() => {
+    if (runtime.status === "ready" && runtime.mode === "local") {
+      try {
         window.localStorage.setItem("personal-finance-subscriptions", JSON.stringify(subscriptions));
       } catch {
         setToast("พื้นที่เก็บข้อมูลรายการสมัครบริการในอุปกรณ์นี้เต็ม");
@@ -323,6 +404,14 @@ function App() {
       }
     }
   }, [recurringExpenses, runtime.status, runtime.mode]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem("personal-finance-custom-categories", JSON.stringify(customCategories));
+    } catch {
+      setToast("หมวดหมู่ที่เพิ่มใหม่ยังบันทึกในอุปกรณ์นี้ไม่ได้");
+    }
+  }, [customCategories]);
 
   useEffect(() => {
     if (!toast) return undefined;
@@ -365,23 +454,77 @@ function App() {
       .sort((left, right) => right.count - left.count || right.latestDate.localeCompare(left.latestDate) || left.name.localeCompare(right.name, "th"))
       .map((item) => item.name);
   }, [transactions, hiddenTransactions]);
+  const transactionCategoryOptions = useMemo(() => uniqueCategoryNames(
+    categoryDefaults.transactions,
+    customCategories.filter((item) => item.scope === "transactions").map((item) => item.name),
+    transactions.map((item) => item.category),
+    hiddenTransactions.map((item) => item.category)
+  ), [customCategories, transactions, hiddenTransactions]);
+  const recurringCategoryOptions = useMemo(() => uniqueCategoryNames(
+    categoryDefaults.recurringExpenses,
+    customCategories.filter((item) => item.scope === "recurringExpenses").map((item) => item.name),
+    recurringExpenses.map((item) => item.category)
+  ), [customCategories, recurringExpenses]);
+  const subscriptionCategoryOptions = useMemo(() => uniqueCategoryNames(
+    categoryDefaults.subscriptions,
+    customCategories.filter((item) => item.scope === "subscriptions").map((item) => item.name),
+    subscriptions.map((item) => item.category)
+  ), [customCategories, subscriptions]);
+
+  async function addCustomCategory(scope, inputName) {
+    const name = String(inputName || "").trim();
+    if (!categoryDefaults[scope] || !name || name.length > 40 || /^[=+\-@]/.test(name) || /[\u0000-\u001f\u007f]/.test(name)) {
+      setToast("ชื่อหมวดหมู่ต้องมี 1–40 ตัวอักษร");
+      return false;
+    }
+    const exists = uniqueCategoryNames(categoryDefaults[scope], customCategories.filter((item) => item.scope === scope).map((item) => item.name))
+      .some((item) => item.toLocaleLowerCase() === name.toLocaleLowerCase());
+    if (exists) {
+      setToast("มีหมวดหมู่นี้อยู่แล้ว");
+      return false;
+    }
+
+    try {
+      const category = runtime.mode === "google"
+        ? await saveGoogleCategory({ scope, name })
+        : { scope, name, createdAt: new Date().toISOString() };
+      setCustomCategories((current) => mergeCustomCategories(current, [category]));
+      setToast("เพิ่มหมวดหมู่ “" + name + "” แล้ว");
+      return category.name || name;
+    } catch (error) {
+      setToast(error.message || "บันทึกหมวดหมู่ไม่สำเร็จ");
+      return false;
+    }
+  }
 
   async function loadGoogleWorkspace() {
     setRuntime({ status: "syncing", mode: "google" });
     const [health, remoteTransactions] = await Promise.all([getGoogleStatus(), listTransactions()]);
     setTransactions(remoteTransactions.filter((item) => item.status !== "ลบแล้ว"));
     setHiddenTransactions(remoteTransactions.filter((item) => item.status === "ลบแล้ว"));
-    const [installmentResult, subscriptionResult, recurringExpenseResult] = await Promise.allSettled([
+    const [installmentResult, debtResult, subscriptionResult, recurringExpenseResult, categoryResult] = await Promise.allSettled([
       listGoogleInstallments(),
+      listGoogleDebts(),
       listGoogleSubscriptions(),
       listGoogleRecurringExpenses(),
+      listGoogleCategories(),
     ]);
+    if (categoryResult.status === "fulfilled") {
+      setCustomCategories((current) => mergeCustomCategories(current, categoryResult.value));
+    }
     if (installmentResult.status === "fulfilled") {
       setInstallments(installmentResult.value.map(prepareInstallmentPlan));
       setInstallmentSync({ ready: true, error: "" });
     } else {
       setInstallments([]);
       setInstallmentSync({ ready: false, error: installmentResult.reason?.message || "Apps Script ยังไม่รองรับข้อมูลผ่อนชำระ" });
+    }
+    if (debtResult.status === "fulfilled") {
+      setDebts(debtResult.value);
+      setDebtSync({ ready: true, error: "" });
+    } else {
+      setDebts([]);
+      setDebtSync({ ready: false, error: debtResult.reason?.message || "Apps Script ยังไม่รองรับรายการทวงหนี้" });
     }
     if (subscriptionResult.status === "fulfilled") {
       setSubscriptions(subscriptionResult.value);
@@ -423,9 +566,11 @@ function App() {
     setTransactions([]);
     setHiddenTransactions([]);
     setInstallments([]);
+    setDebts([]);
     setSubscriptions([]);
     setRecurringExpenses([]);
     setInstallmentSync({ ready: false, error: "กรุณาเข้าสู่ระบบเพื่อโหลดข้อมูลผ่อนชำระ" });
+    setDebtSync({ ready: false, error: "กรุณาเข้าสู่ระบบเพื่อโหลดรายการทวงหนี้" });
     setSubscriptionSync({ ready: false, error: "กรุณาเข้าสู่ระบบเพื่อโหลดข้อมูลสมัครบริการ" });
     setRecurringExpenseSync({ ready: false, error: "กรุณาเข้าสู่ระบบเพื่อโหลดรายจ่ายประจำ" });
     setShowSettings(false);
@@ -451,6 +596,17 @@ function App() {
       setInstallmentSync({ ready: true, error: "" });
     } catch (error) {
       setInstallmentSync({ ready: false, error: error.message || "Apps Script ยังไม่รองรับข้อมูลผ่อนชำระ" });
+    }
+  }
+
+  async function retryDebtSync() {
+    if (runtime.mode !== "google") return;
+    setDebtSync({ ready: false, error: "กำลังโหลดจาก Google Sheets" });
+    try {
+      setDebts(await listGoogleDebts());
+      setDebtSync({ ready: true, error: "" });
+    } catch (error) {
+      setDebtSync({ ready: false, error: error.message || "Apps Script ยังไม่รองรับรายการทวงหนี้" });
     }
   }
 
@@ -502,10 +658,11 @@ function App() {
       setToast("ยังบันทึกข้ามอุปกรณ์ไม่ได้ กรุณาอัปเดต Apps Script ให้รองรับรายการสมัครบริการก่อน");
       return false;
     }
+    const existing = subscriptions.find((item) => item.id === input.id);
     const subscription = {
       ...input,
       id: input.id || globalThis.crypto?.randomUUID?.() || `SUB-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      createdAt: new Date().toISOString(),
+      createdAt: existing?.createdAt || input.createdAt || new Date().toISOString(),
     };
     setSavingInstallment(true);
     try {
@@ -539,8 +696,9 @@ function App() {
       setToast(runtime.mode === "google" ? "บันทึกรายจ่ายประจำลง Google Sheets แล้ว" : "บันทึกรายจ่ายประจำไว้ในอุปกรณ์นี้แล้ว");
       return true;
     } catch (error) {
-      setToast(error.message || "บันทึกรายจ่ายประจำไม่สำเร็จ");
-      return false;
+      const message = error.message || "บันทึกรายจ่ายประจำไม่สำเร็จ";
+      setToast(message);
+      return { ok: false, error: message };
     } finally {
       setSavingRecurringExpense(false);
     }
@@ -582,6 +740,108 @@ function App() {
     } finally {
       setUpdatingPayment("");
     }
+  }
+
+  async function createDebt(input) {
+    if (runtime.mode === "google" && !debtSync.ready) {
+      setToast("ยังบันทึกทวงหนี้ข้ามอุปกรณ์ไม่ได้ กรุณาอัปเดต Apps Script ก่อน");
+      return false;
+    }
+    let debtInput;
+    try {
+      debtInput = validateDebtInput({ ...input, id: input.id || makeDebtId() });
+    } catch (error) {
+      setToast(error.message || "ตรวจข้อมูลหนี้ไม่สำเร็จ");
+      return false;
+    }
+    setSavingDebt(true);
+    try {
+      const created = {
+        ...debtInput,
+        createdAt: new Date().toISOString(),
+        payments: [],
+      };
+      const saved = runtime.mode === "google" ? await saveGoogleDebt(created) : created;
+      setDebts((current) => [saved, ...current.filter((item) => item.id !== saved.id)]);
+      setToast(runtime.mode === "google" ? "บันทึกรายการทวงหนี้และหลักฐานลง Google Sheets/Drive แล้ว" : "บันทึกรายการทดลองไว้ในอุปกรณ์นี้แล้ว");
+      return true;
+    } catch (error) {
+      setToast(error.message || "บันทึกรายการทวงหนี้ไม่สำเร็จ · ลองใหม่ได้โดยไม่สร้างรายการซ้ำ");
+      return false;
+    } finally {
+      setSavingDebt(false);
+    }
+  }
+
+  async function recordDebtPayment(input) {
+    if (payingDebt) return false;
+    if (runtime.mode === "google" && !debtSync.ready) {
+      setToast("ยังบันทึกหลักฐานการชำระข้ามอุปกรณ์ไม่ได้ กรุณาอัปเดต Apps Script ก่อน");
+      return false;
+    }
+    const debt = debts.find((item) => item.id === input.id);
+    if (!debt) {
+      setToast("ไม่พบรายการทวงหนี้นี้แล้ว กรุณาโหลดรายการใหม่");
+      return false;
+    }
+    const busyKey = input.id + ":" + input.installmentNumber;
+    setPayingDebt(busyKey);
+    try {
+      let saved;
+      if (runtime.mode === "google") {
+        saved = await recordGoogleDebtPayment(input);
+      } else {
+        const summaryForDebt = summarizeDebt(debt);
+        const scheduled = summaryForDebt.schedule.find((item) => item.installmentNumber === input.installmentNumber);
+        if (!scheduled || scheduled.paid) throw new Error("งวดนี้บันทึกการชำระแล้ว");
+        const payment = {
+          installmentNumber: scheduled.installmentNumber,
+          paidAt: input.paidAt,
+          evidence: input.evidence,
+          signature: input.signature,
+          note: input.note || "",
+        };
+        const payments = [...(debt.payments || []), payment];
+        saved = {
+          ...debt,
+          payments,
+          schedule: buildDebtSchedule({ ...debt, payments }),
+        };
+        const summary = summarizeDebt(saved);
+        Object.assign(saved, {
+          totalAmount: summary.totalAmount,
+          paidAmount: summary.paidAmount,
+          remainingAmount: summary.remainingAmount,
+          paidCount: summary.paidCount,
+          complete: summary.complete,
+        });
+      }
+      setDebts((current) => current.map((item) => item.id === saved.id ? saved : item));
+      setToast(saved.complete ? "รับชำระครบแล้ว · เก็บหลักฐานและลายเซ็นไว้เรียบร้อย" : "บันทึกการชำระงวดนี้พร้อมหลักฐานแล้ว");
+      return true;
+    } catch (error) {
+      setToast(error.message || "บันทึกการชำระไม่สำเร็จ · ตรวจสอบการเชื่อมต่อแล้วลองอีกครั้ง");
+      return false;
+    } finally {
+      setPayingDebt("");
+    }
+  }
+
+  async function loadDebtEvidence(reference) {
+    if (runtime.mode === "google") return getGoogleDebtEvidencePreview(reference);
+    const debt = debts.find((item) => item.id === reference.id);
+    if (!debt) throw new Error("ไม่พบรายการทวงหนี้");
+    const payment = (debt.payments || []).find((item) => Number(item.installmentNumber) === Number(reference.installmentNumber));
+    let media = null;
+    if (reference.kind === "loan-photo") media = debt.loanEvidence?.[reference.index];
+    else if (reference.kind === "loan-signature") media = debt.lenderSignature;
+    else if (reference.kind === "payment-photo") media = payment?.evidence?.[reference.index];
+    else if (reference.kind === "payment-signature") media = payment?.signature;
+    if (!media?.base64) throw new Error("ไม่พบไฟล์หลักฐานในอุปกรณ์นี้");
+    const binary = atob(media.base64.replace(/^data:[^,]*,/, ""));
+    const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+    const blob = new Blob([bytes], { type: media.mimeType || "image/jpeg" });
+    return { url: URL.createObjectURL(blob), mimeType: blob.type };
   }
 
   function openUpload() {
@@ -936,6 +1196,7 @@ function App() {
               connection={connection}
               hiddenTransactions={hiddenTransactions.filter((item) => item.budgetMonth === selectedMonth)}
               onRestoreMonth={restoreHiddenForMonth}
+              categoryOptions={transactionCategoryOptions}
             />
           )}
           {activeView === "installments" && (
@@ -951,8 +1212,24 @@ function App() {
               updatingPayment={updatingPayment}
               paidCelebrationKey={paidCelebrationKey}
               onCreate={createInstallment}
+              onUpdate={createInstallment}
               onTogglePayment={toggleInstallmentPayment}
               onDelete={(plan) => setDeleteTarget({ type: "installment", id: plan.id, name: plan.name })}
+              onSettings={() => setShowSettings(true)}
+            />
+          )}
+          {activeView === "debts" && (
+            <DebtCollectionView
+              debts={debts}
+              storageMode={runtime.mode}
+              syncReady={debtSync.ready}
+              syncError={debtSync.error}
+              saving={savingDebt}
+              paying={payingDebt}
+              onRetrySync={retryDebtSync}
+              onCreate={createDebt}
+              onRecordPayment={recordDebtPayment}
+              onLoadEvidence={loadDebtEvidence}
               onSettings={() => setShowSettings(true)}
             />
           )}
@@ -969,6 +1246,10 @@ function App() {
               onSelect={setSelectedSubscription}
               onDelete={(subscription) => setDeleteTarget({ type: "subscription", id: subscription.id, name: subscription.name })}
               onSettings={() => setShowSettings(true)}
+              categoryOptions={subscriptionCategoryOptions}
+              onAddCategory={addCustomCategory}
+              editingSubscription={editingSubscription}
+              onCloseEdit={() => setEditingSubscription(null)}
             />
           )}
           {activeView === "recurring" && (
@@ -984,6 +1265,8 @@ function App() {
               onDelete={(expense) => setDeleteTarget({ type: "recurringExpense", id: expense.id, name: expense.name })}
               onNavigate={setActiveView}
               onSettings={() => setShowSettings(true)}
+              categoryOptions={recurringCategoryOptions}
+              onAddCategory={addCustomCategory}
             />
           )}
           {activeView === "coach" && <CoachView summary={summary} selectedMonth={selectedMonth} />}
@@ -1002,9 +1285,9 @@ function App() {
         }}
       />
       {draft && (
-        <ReviewModal draft={draft} monthChoices={monthChoices} transactionNameOptions={transactionNameOptions} saving={saving} storageMode={runtime.mode} onChange={updateDraft} onAttachEvidence={attachPendingEvidence} onClose={closeDraft} onConfirm={confirmDraft} onRequestDelete={() => setDeleteTarget({ type: "transaction", id: draft.transactionId, name: draft.name })} />
+        <ReviewModal draft={draft} monthChoices={monthChoices} transactionNameOptions={transactionNameOptions} categoryOptions={transactionCategoryOptions} onAddCategory={addCustomCategory} saving={saving} storageMode={runtime.mode} onChange={updateDraft} onAttachEvidence={attachPendingEvidence} onClose={closeDraft} onConfirm={confirmDraft} onRequestDelete={() => setDeleteTarget({ type: "transaction", id: draft.transactionId, name: draft.name })} />
       )}
-      {selectedSubscription && <SubscriptionDetailModal subscription={selectedSubscription} selectedMonth={selectedMonth} onClose={() => setSelectedSubscription(null)} onDelete={() => setDeleteTarget({ type: "subscription", id: selectedSubscription.id, name: selectedSubscription.name })} />}
+      {selectedSubscription && <SubscriptionDetailModal subscription={selectedSubscription} selectedMonth={selectedMonth} onClose={() => setSelectedSubscription(null)} onEdit={() => { setEditingSubscription(selectedSubscription); setSelectedSubscription(null); }} onDelete={() => setDeleteTarget({ type: "subscription", id: selectedSubscription.id, name: selectedSubscription.name })} />}
       {deleteTarget && <DeleteConfirmDialog target={deleteTarget} storageMode={runtime.mode} busy={deleteBusy} onCancel={() => !deleteBusy && setDeleteTarget(null)} onConfirm={confirmDeleteTarget} />}
       {showSettings && <ConnectionDialog connection={connection} onClose={() => setShowSettings(false)} onLogout={handleLogout} onRetry={retryGoogleConnection} />}
       {toast && <div className="toast" role="status" aria-live="polite"><Icon name="check" size={17} /><span className="toast-message">{toast}</span>{toastAction?.message === toast && <button className="toast-undo-button" type="button" onClick={undoLastDelete} disabled={toastActionBusy}>{toastActionBusy ? "กำลังคืน…" : "เลิกทำ"}</button>}</div>}
@@ -1097,7 +1380,7 @@ function MobileNav({ activeView, onNavigate, onUpload }) {
   const quickAddButtonRef = useRef(null);
   const firstQuickAddActionRef = useRef(null);
   const primaryItems = navItems.filter((item) => ["overview", "history", "recurring"].includes(item.key));
-  const moreItems = navItems.filter((item) => ["installments", "subscriptions", "upload", "coach"].includes(item.key));
+  const moreItems = navItems.filter((item) => ["installments", "debts", "subscriptions", "upload", "coach"].includes(item.key));
   const moreActive = moreItems.some((item) => item.key === activeView);
 
   useEffect(() => {
@@ -1201,7 +1484,7 @@ function Topbar({ activeView, selectedMonth, monthChoices, connection, onMonthCh
         </button>
         <button className="icon-button settings-button" type="button" aria-label="ตั้งค่าและการเชื่อมต่อ" onClick={onSettings}><Icon name="settings" size={19} /></button>
       </div>
-      {activeView !== "installments" && (
+      {!["installments", "debts"].includes(activeView) && (
         <>
           <div className="month-control">
             <button className="icon-button small" aria-label="เดือนก่อนหน้า" disabled={monthIndex <= 0} onClick={() => onMonthChange(monthChoices[Math.max(0, monthIndex - 1)].value)}><Icon name="chevronLeft" size={18} /></button>
@@ -1380,11 +1663,11 @@ function ProcessStep({ number, title, detail, active }) {
   return <div className={`process-step ${active ? "active" : ""}`}><span className="step-number">{number}</span><span><strong>{title}</strong><small>{detail}</small></span>{active && <span className="step-current">ตอนนี้</span>}</div>;
 }
 
-function HistoryView({ transactions, selectedMonth, connection, onSelectTransaction, hiddenTransactions, onRestoreMonth }) {
+function HistoryView({ transactions, selectedMonth, connection, onSelectTransaction, hiddenTransactions, onRestoreMonth, categoryOptions: availableCategories }) {
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("ทั้งหมด");
   const [restoring, setRestoring] = useState(false);
-  const categories = ["ทั้งหมด", ...categoryOptions];
+  const categories = ["ทั้งหมด", ...availableCategories];
   const filtered = transactions.filter((item) => {
     const matchesMonth = item.budgetMonth === selectedMonth;
     const matchesCategory = category === "ทั้งหมด" || item.category === category;
@@ -1428,8 +1711,9 @@ function HistoryView({ transactions, selectedMonth, connection, onSelectTransact
   );
 }
 
-function InstallmentsView({ plans, month, onMonthChange, storageMode, syncReady, syncError, onRetrySync, saving, updatingPayment, paidCelebrationKey, onCreate, onTogglePayment, onDelete, onSettings }) {
+function InstallmentsView({ plans, month, onMonthChange, storageMode, syncReady, syncError, onRetrySync, saving, updatingPayment, paidCelebrationKey, onCreate, onUpdate, onTogglePayment, onDelete, onSettings }) {
   const [formOpen, setFormOpen] = useState(false);
+  const [editingPlan, setEditingPlan] = useState(null);
   const summary = summarizeInstallments(plans, month);
   const duePlans = [...new Map(summary.dueThisMonth.map(({ plan }) => [plan.id, plan])).values()];
   const dueSources = [...new Set(duePlans.map((plan) => installmentBanks.find((item) => item.value === plan.bank)?.label || plan.bank))];
@@ -1443,7 +1727,7 @@ function InstallmentsView({ plans, month, onMonthChange, storageMode, syncReady,
           <h2>ผ่อนสินค้าด้วยบัตรเครดิต</h2>
           <p>ดูยอดที่ต้องจ่ายแต่ละเดือน และทำเครื่องหมายเมื่อชำระแล้ว</p>
         </div>
-        <button className="primary-button installment-add-button" type="button" onClick={() => setFormOpen(true)} disabled={!canSave} title={!canSave ? "อัปเดตการเชื่อมต่อก่อนบันทึกแผนผ่อน" : undefined}>
+        <button className="primary-button installment-add-button" type="button" onClick={() => { setEditingPlan(null); setFormOpen(true); }} disabled={!canSave} title={!canSave ? "อัปเดตการเชื่อมต่อก่อนบันทึกแผนผ่อน" : undefined}>
           <Icon name="plus" size={18} />เพิ่มรายการผ่อน
         </button>
       </section>
@@ -1494,6 +1778,8 @@ function InstallmentsView({ plans, month, onMonthChange, storageMode, syncReady,
               paidCelebrationKey={paidCelebrationKey}
               onTogglePayment={onTogglePayment}
               canDelete={canSave}
+              canEdit={canSave}
+              onEdit={() => { setEditingPlan(plan); setFormOpen(true); }}
               onDelete={() => onDelete(plan)}
             />
           ))}
@@ -1503,19 +1789,19 @@ function InstallmentsView({ plans, month, onMonthChange, storageMode, syncReady,
           <div className="installment-empty-icon"><Icon name="card" size={25} /></div>
           <strong>ยังไม่มีรายการผ่อน</strong>
           <span>เพิ่มสินค้าใบแรก แล้วระบบจะสร้างตารางยอดชำระรายเดือนให้</span>
-          <button className="secondary-button" type="button" onClick={() => setFormOpen(true)} disabled={!canSave}><Icon name="plus" size={16} />เพิ่มรายการผ่อน</button>
+          <button className="secondary-button" type="button" onClick={() => { setEditingPlan(null); setFormOpen(true); }} disabled={!canSave}><Icon name="plus" size={16} />เพิ่มรายการผ่อน</button>
         </section>
       )}
 
-      {formOpen && <InstallmentFormModal saving={saving} onClose={() => setFormOpen(false)} onSave={async (form) => {
-        const saved = await onCreate(form);
-        if (saved) setFormOpen(false);
+      {formOpen && <InstallmentFormModal key={editingPlan?.id || "new"} plan={editingPlan} saving={saving} onClose={() => { setFormOpen(false); setEditingPlan(null); }} onSave={async (form) => {
+        const saved = editingPlan ? await onUpdate(form) : await onCreate(form);
+        if (saved) { setFormOpen(false); setEditingPlan(null); }
       }} />}
     </div>
   );
 }
 
-function InstallmentPlanCard({ plan, index, updatingPayment, paidCelebrationKey, onTogglePayment, canDelete, onDelete }) {
+function InstallmentPlanCard({ plan, index, updatingPayment, paidCelebrationKey, onTogglePayment, canDelete, canEdit, onEdit, onDelete }) {
   const [expanded, setExpanded] = useState(false);
   const [scheduleExpanded, setScheduleExpanded] = useState(false);
   const bank = installmentBanks.find((item) => item.value === plan.bank) || { label: plan.bank || "ไม่ระบุ", short: "?", tone: "loan" };
@@ -1585,14 +1871,14 @@ function InstallmentPlanCard({ plan, index, updatingPayment, paidCelebrationKey,
               </div>
             </div>
           )}
-          <div className="installment-delete-row"><span>นำแผนนี้ออกจากรายการผ่อน</span><button className="danger-button" type="button" onClick={onDelete} disabled={!canDelete} title={!canDelete ? "รอการเชื่อมต่อ Apps Script เพื่อบันทึกการลบ" : undefined}><Icon name="trash" size={15} />ลบแผนผ่อน</button></div>
+          <div className="installment-delete-row"><button className="secondary-button installment-edit-button" type="button" onClick={onEdit} disabled={!canEdit} title={!canEdit ? "รอการเชื่อมต่อ Apps Script เพื่อบันทึกการแก้ไข" : undefined}><Icon name="edit" size={15} />แก้ไขข้อมูล</button><span>นำแผนนี้ออกจากรายการผ่อน</span><button className="danger-button" type="button" onClick={onDelete} disabled={!canDelete} title={!canDelete ? "รอการเชื่อมต่อ Apps Script เพื่อบันทึกการลบ" : undefined}><Icon name="trash" size={15} />ลบแผนผ่อน</button></div>
         </div>
       )}
     </article>
   );
 }
 
-function SubscriptionsView({ subscriptions, selectedMonth, storageMode, syncReady, syncError, onRetrySync, saving, onCreate, onSelect, onDelete, onSettings }) {
+function SubscriptionsView({ subscriptions, selectedMonth, storageMode, syncReady, syncError, onRetrySync, saving, onCreate, onSelect, onDelete, onSettings, categoryOptions: availableCategories, onAddCategory, editingSubscription, onCloseEdit }) {
   const [formOpen, setFormOpen] = useState(false);
   const canSave = storageMode !== "google" || syncReady;
   const monthlyDue = useMemo(() => subscriptions.map((subscription) => ({
@@ -1632,7 +1918,7 @@ function SubscriptionsView({ subscriptions, selectedMonth, storageMode, syncRead
         {orderedSubscriptions.length ? <div className="subscription-list">{orderedSubscriptions.map((subscription) => <SubscriptionRow key={subscription.id} subscription={subscription} selectedMonth={selectedMonth} onSelect={() => onSelect(subscription)} onDelete={() => onDelete(subscription)} />)}</div> : <div className="subscription-empty"><span><Icon name="calendar" size={22} /></span><strong>ยังไม่มีบริการที่ติดตาม</strong><small>เพิ่มชื่อแอปหรือบริการ แล้วระบบจะแสดงเดือนที่เรียกเก็บให้อัตโนมัติ</small><button className="secondary-button" type="button" onClick={() => setFormOpen(true)} disabled={!canSave}><Icon name="plus" size={16} />เพิ่มบริการแรก</button></div>}
       </section>
 
-      {formOpen && <SubscriptionFormModal saving={saving} onClose={() => setFormOpen(false)} onSave={async (form) => { const saved = await onCreate(form); if (saved) setFormOpen(false); }} />}
+      {(formOpen || editingSubscription) && <SubscriptionFormModal key={editingSubscription?.id || "new"} subscription={editingSubscription} saving={saving} categoryOptions={availableCategories} onAddCategory={onAddCategory} onClose={() => { setFormOpen(false); onCloseEdit?.(); }} onSave={async (form) => { const saved = await onCreate(form); if (saved) { setFormOpen(false); onCloseEdit?.(); } }} />}
     </div>
   );
 }
@@ -1652,33 +1938,33 @@ function SubscriptionRow({ subscription, selectedMonth, onSelect, onDelete }) {
   );
 }
 
-function SubscriptionFormModal({ saving, onClose, onSave }) {
-  const [form, setForm] = useState({ name: "", amount: "", cycle: "monthly", nextBillingDate: defaultSubscriptionBillingDate(), category: "บันเทิง", paymentMethod: "KBank", note: "" });
+function SubscriptionFormModal({ subscription, saving, categoryOptions: availableCategories, onAddCategory, onClose, onSave }) {
+  const [form, setForm] = useState(() => subscription ? { ...subscription, amount: String(subscription.amount) } : { name: "", amount: "", cycle: "monthly", nextBillingDate: defaultSubscriptionBillingDate(), category: "บันเทิง", paymentMethod: "KBank", note: "" });
   function change(field, value) { setForm((current) => ({ ...current, [field]: value })); }
   async function submit(event) {
     event.preventDefault();
-    await onSave({ ...form, amount: Number(form.amount), id: globalThis.crypto?.randomUUID?.() || `SUB-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` });
+    await onSave({ ...form, amount: Number(form.amount), id: form.id || globalThis.crypto?.randomUUID?.() || `SUB-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` });
   }
   return (
     <div className="modal-backdrop subscription-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !saving && onClose()}>
       <section className="subscription-form-modal" role="dialog" aria-modal="true" aria-labelledby="subscription-form-title">
-        <header className="modal-header"><div><span className="modal-kicker">บริการที่เรียกเก็บเป็นประจำ</span><h2 id="subscription-form-title">เพิ่มรายการสมัครบริการ</h2></div><button className="icon-button" type="button" aria-label="ปิด" onClick={onClose} disabled={saving}><Icon name="close" size={19} /></button></header>
+        <header className="modal-header"><div><span className="modal-kicker">บริการที่เรียกเก็บเป็นประจำ</span><h2 id="subscription-form-title">{subscription ? "แก้ไขรายการสมัครบริการ" : "เพิ่มรายการสมัครบริการ"}</h2></div><button className="icon-button" type="button" aria-label="ปิด" onClick={onClose} disabled={saving}><Icon name="close" size={19} /></button></header>
         <form onSubmit={submit}>
           <div className="review-form subscription-form-body">
             <label>ชื่อแอปหรือบริการ<input autoFocus required maxLength={120} placeholder="เช่น iCloud+, Netflix, YouTube Premium" value={form.name} onChange={(event) => change("name", event.target.value)} /></label>
             <div className="form-two-col"><label>ยอดเรียกเก็บ (บาท)<input type="number" min="0.01" max="100000000" step="0.01" required placeholder="เช่น 99" value={form.amount} onChange={(event) => change("amount", event.target.value)} /></label><label>รอบเรียกเก็บ<select value={form.cycle} onChange={(event) => change("cycle", event.target.value)}><option value="monthly">รายเดือน</option><option value="yearly">รายปี</option></select></label></div>
-            <div className="form-two-col"><label>วันเรียกเก็บครั้งถัดไป<input type="date" required value={form.nextBillingDate} onChange={(event) => change("nextBillingDate", event.target.value)} /></label><label>หมวดหมู่<select value={form.category} onChange={(event) => change("category", event.target.value)}>{subscriptionCategories.map((category) => <option key={category}>{category}</option>)}</select></label></div>
+            <div className="form-two-col"><label>วันเรียกเก็บครั้งถัดไป<input type="date" required value={form.nextBillingDate} onChange={(event) => change("nextBillingDate", event.target.value)} /></label><CategorySelect label="หมวดหมู่" scope="subscriptions" value={form.category} options={availableCategories} onChange={(value) => change("category", value)} onAddCategory={onAddCategory} /></div>
             <label>ช่องทางชำระ<select value={form.paymentMethod} onChange={(event) => change("paymentMethod", event.target.value)}>{subscriptionPaymentMethods.map((method) => <option key={method}>{method}</option>)}</select></label>
             <label>หมายเหตุ<textarea rows="2" maxLength={500} placeholder="เช่น แพ็กเกจครอบครัว หรือบัญชีที่ใช้" value={form.note} onChange={(event) => change("note", event.target.value)} /></label>
           </div>
-          <footer className="modal-footer"><button className="secondary-button" type="button" onClick={onClose} disabled={saving}>ยกเลิก</button><button className="primary-button" type="submit" disabled={saving}>{saving ? "กำลังบันทึก…" : <><Icon name="check" size={17} />บันทึกรายการ</>}</button></footer>
+          <footer className="modal-footer"><button className="secondary-button" type="button" onClick={onClose} disabled={saving}>ยกเลิก</button><button className="primary-button" type="submit" disabled={saving}>{saving ? "กำลังบันทึก…" : <><Icon name="check" size={17} />{subscription ? "บันทึกการแก้ไข" : "บันทึกรายการ"}</>}</button></footer>
         </form>
       </section>
     </div>
   );
 }
 
-function SubscriptionDetailModal({ subscription, selectedMonth, onClose, onDelete }) {
+function SubscriptionDetailModal({ subscription, selectedMonth, onClose, onEdit, onDelete }) {
   const dueDate = subscriptionBillingDate(subscription, selectedMonth);
   const nextDate = nextSubscriptionBillingDate(subscription, selectedMonth);
   return (
@@ -1689,23 +1975,27 @@ function SubscriptionDetailModal({ subscription, selectedMonth, onClose, onDelet
           <div className="subscription-detail-amount"><span><Icon name="calendar" size={18} /></span><div><small>{dueDate ? `ครบกำหนด ${getMonthLabel(selectedMonth)}` : `ไม่มีรอบเรียกเก็บใน ${getMonthLabel(selectedMonth)}`}</small><strong>฿ {formatNumber(subscription.amount)}</strong></div><em>{subscription.cycle === "yearly" ? "รายปี" : "รายเดือน"}</em></div>
           <dl className="subscription-detail-list"><div><dt>วันที่เรียกเก็บ</dt><dd>{dueDate ? formatDate(dueDate) : `ครั้งถัดไป ${formatDate(nextDate)}`}</dd></div><div><dt>หมวดหมู่</dt><dd>{subscription.category || "อื่นๆ"}</dd></div><div><dt>ช่องทางชำระ</dt><dd>{subscription.paymentMethod}</dd></div>{subscription.note && <div><dt>หมายเหตุ</dt><dd>{subscription.note}</dd></div>}</dl>
         </div>
-        <footer className="modal-footer subscription-detail-footer"><button className="danger-button" type="button" onClick={onDelete}><Icon name="trash" size={16} />ลบบริการ</button><button className="secondary-button" type="button" onClick={onClose}>ปิด</button></footer>
+        <footer className="modal-footer subscription-detail-footer"><button className="danger-button" type="button" onClick={onDelete}><Icon name="trash" size={16} />ลบบริการ</button><div className="subscription-detail-actions"><button className="secondary-button" type="button" onClick={onEdit}><Icon name="edit" size={15} />แก้ไข</button><button className="secondary-button" type="button" onClick={onClose}>ปิด</button></div></footer>
       </section>
     </div>
   );
 }
 
-function InstallmentFormModal({ saving, onClose, onSave }) {
+function InstallmentFormModal({ plan, saving, onClose, onSave }) {
   const [form, setForm] = useState(() => ({
-    id: "",
-    name: "",
-    price: "",
-    downPayment: "0",
-    interestRate: "0",
-    months: "10",
-    bank: "กสิกรไทย",
-    startMonth: nextInstallmentMonth(),
+    id: plan?.id || "",
+    name: plan?.name || "",
+    price: plan ? String(plan.price) : "",
+    downPayment: plan ? String(plan.downPayment) : "0",
+    interestRate: plan ? String(plan.interestRate) : "0",
+    months: plan ? String(plan.months) : "10",
+    bank: plan?.bank || "กสิกรไทย",
+    startMonth: plan?.startMonth || nextInstallmentMonth(),
+    schedule: plan?.schedule || [],
+    createdAt: plan?.createdAt || "",
   }));
+  const [formError, setFormError] = useState("");
+  const hasPaidPayments = Boolean(plan?.schedule.some((payment) => payment.paid));
   const price = Number(form.price);
   const downPayment = Number(form.downPayment || 0);
   const rate = Number(form.interestRate);
@@ -1715,20 +2005,27 @@ function InstallmentFormModal({ saving, onClose, onSave }) {
 
   function change(field, value) {
     setForm((current) => ({ ...current, [field]: value }));
+    setFormError("");
   }
 
   async function submit(event) {
     event.preventDefault();
+    if (hasPaidPayments && months < Math.max(...plan.schedule.filter((payment) => payment.paid).map((payment) => payment.installmentNumber))) {
+      setFormError("จำนวนงวดต้องไม่ต่ำกว่างวดที่ชำระไปแล้ว");
+      return;
+    }
     const id = form.id || globalThis.crypto?.randomUUID?.() || `INS-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    setForm((current) => ({ ...current, id }));
-    await onSave({ ...form, id, price, downPayment, interestRate: rate, months });
+    const refreshed = prepareInstallmentPlan({ ...form, id, price, downPayment, interestRate: rate, months, schedule: [] });
+    const paidPayments = new Map((plan?.schedule || []).filter((payment) => payment.paid).map((payment) => [payment.installmentNumber, payment]));
+    const schedule = refreshed.schedule.map((payment) => paidPayments.get(payment.installmentNumber) || payment);
+    await onSave({ ...refreshed, createdAt: plan?.createdAt || refreshed.createdAt, schedule });
   }
 
   return (
     <div className="modal-backdrop installment-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !saving && onClose()}>
       <section className="installment-form-modal" role="dialog" aria-modal="true" aria-labelledby="installment-form-title">
         <header className="modal-header">
-          <div><span className="modal-kicker">แผนผ่อนสินค้า</span><h2 id="installment-form-title">เพิ่มรายการผ่อน</h2></div>
+          <div><span className="modal-kicker">แผนผ่อนสินค้า</span><h2 id="installment-form-title">{plan ? "แก้ไขรายการผ่อน" : "เพิ่มรายการผ่อน"}</h2></div>
           <button className="icon-button" type="button" aria-label="ปิด" onClick={onClose} disabled={saving}><Icon name="close" size={19} /></button>
         </header>
         <form onSubmit={submit}>
@@ -1736,17 +2033,18 @@ function InstallmentFormModal({ saving, onClose, onSave }) {
             <div className="review-form installment-fields">
               <label>ชื่อรายการสินค้า<input autoFocus maxLength={120} required placeholder="เช่น iPad Air, โทรศัพท์" value={form.name} onChange={(event) => change("name", event.target.value)} /></label>
               <div className="form-two-col">
-                <label>ราคาสินค้า (บาท)<input type="number" min="0.01" max="100000000" step="0.01" required placeholder="เช่น 25000" value={form.price} onChange={(event) => change("price", event.target.value)} /></label>
-                <label>เงินดาวน์ (บาท)<input type="number" min="0" max={price > 0 ? Math.max(0, price - 0.01) : 0} step="0.01" required value={form.downPayment} onChange={(event) => change("downPayment", event.target.value)} /><small className="installment-field-hint">หักออกจากราคาก่อนคำนวณดอกเบี้ย</small></label>
+                <label>ราคาสินค้า (บาท)<input type="number" min="0.01" max="100000000" step="0.01" required placeholder="เช่น 25000" value={form.price} disabled={hasPaidPayments} onChange={(event) => change("price", event.target.value)} /></label>
+                <label>เงินดาวน์ (บาท)<input type="number" min="0" max={price > 0 ? Math.max(0, price - 0.01) : 0} step="0.01" required value={form.downPayment} disabled={hasPaidPayments} onChange={(event) => change("downPayment", event.target.value)} /><small className="installment-field-hint">หักออกจากราคาก่อนคำนวณดอกเบี้ย</small></label>
               </div>
               <div className="form-two-col">
-                <label>ดอกเบี้ยรวมตลอดแผน (%)<input type="number" min="0" max="100" step="0.01" required value={form.interestRate} onChange={(event) => change("interestRate", event.target.value)} /><small className="installment-field-hint">เริ่มต้น 0% · คิดจากยอดหลังหักเงินดาวน์</small></label>
-                <label>จำนวนเดือน<input type="number" min="1" max="60" step="1" required value={form.months} onChange={(event) => change("months", event.target.value)} /></label>
+                <label>ดอกเบี้ยรวมตลอดแผน (%)<input type="number" min="0" max="100" step="0.01" required value={form.interestRate} disabled={hasPaidPayments} onChange={(event) => change("interestRate", event.target.value)} /><small className="installment-field-hint">เริ่มต้น 0% · คิดจากยอดหลังหักเงินดาวน์</small></label>
+                <label>จำนวนเดือน<input type="number" min="1" max="60" step="1" required value={form.months} disabled={hasPaidPayments} onChange={(event) => change("months", event.target.value)} /></label>
               </div>
+              {hasPaidPayments && <p className="installment-edit-note"><Icon name="info" size={15} />แก้ชื่อหรือธนาคารได้ ส่วนยอดและจำนวนงวดล็อกไว้เพื่อรักษาประวัติงวดที่ชำระแล้ว</p>}
               <div className="installment-start-month" aria-live="polite"><span className="installment-start-icon"><Icon name="calendar" size={16} /></span><span><small>เริ่มชำระงวดแรก</small><strong>{installmentMonthLabel(form.startMonth)}</strong></span></div>
               <fieldset className="installment-bank-picker">
                 <legend>ธนาคาร / สินเชื่อ</legend>
-                <div>{installmentBanks.map((bank) => <button key={bank.value} className={`installment-bank-choice ${form.bank === bank.value ? "selected" : ""}`} type="button" aria-pressed={form.bank === bank.value} onClick={() => change("bank", bank.value)}><span className={`installment-bank-mark bank-${bank.tone}`}>{bank.short}</span><span>{bank.label}</span><span className="bank-choice-check"><Icon name="check" size={13} /></span></button>)}</div>
+                <div>{installmentBanks.map((bank) => <button key={bank.value} className={`installment-bank-choice ${form.bank === bank.value ? "selected" : ""}`} type="button" disabled={saving} aria-pressed={form.bank === bank.value} onClick={() => change("bank", bank.value)}><span className={`installment-bank-mark bank-${bank.tone}`}>{bank.short}</span><span>{bank.label}</span><span className="bank-choice-check"><Icon name="check" size={13} /></span></button>)}</div>
               </fieldset>
             </div>
             <aside className="installment-live-preview" aria-live="polite">
@@ -1761,9 +2059,10 @@ function InstallmentFormModal({ saving, onClose, onSave }) {
               <p>คิดดอกเบี้ยจากยอดคงเหลือหลังหักเงินดาวน์ แบ่งจ่ายรายเดือนและปรับเศษสตางค์ในงวดสุดท้าย</p>
             </aside>
           </div>
+          {formError && <div className="installment-form-error" role="alert"><Icon name="info" size={15} />{formError}</div>}
           <footer className="modal-footer">
             <button className="secondary-button" type="button" onClick={onClose} disabled={saving}>ยกเลิก</button>
-            <button className="primary-button" type="submit" disabled={saving || !form.name.trim() || !(price > 0) || downPayment < 0 || downPayment >= price || !(months > 0)}><Icon name={saving ? "clock" : "check"} size={16} />{saving ? "กำลังบันทึก…" : "บันทึกแผนผ่อน"}</button>
+            <button className="primary-button" type="submit" disabled={saving || !form.name.trim() || !(price > 0) || downPayment < 0 || downPayment >= price || !(months > 0)}><Icon name={saving ? "clock" : "check"} size={16} />{saving ? "กำลังบันทึก…" : plan ? "บันทึกการแก้ไข" : "บันทึกแผนผ่อน"}</button>
           </footer>
         </form>
       </section>
@@ -1846,7 +2145,7 @@ function SavedEvidencePreview({ transactionId, evidenceUrl }) {
   return <img src={preview.url} alt="หลักฐานรายการจาก Google Drive" onError={() => setPreview((current) => ({ ...current, state: "failed", url: "" }))} />;
 }
 
-function ReviewModal({ draft, monthChoices, transactionNameOptions, saving, storageMode, onChange, onAttachEvidence, onClose, onConfirm, onRequestDelete }) {
+function ReviewModal({ draft, monthChoices, transactionNameOptions, categoryOptions: availableCategories, onAddCategory, saving, storageMode, onChange, onAttachEvidence, onClose, onConfirm, onRequestDelete }) {
   const isPending = Boolean(draft.isPending);
   const isExisting = Boolean(draft.isExisting) && !isPending;
   const isOcrProcessing = draft.ocrStatus === "reading";
@@ -1893,7 +2192,7 @@ function ReviewModal({ draft, monthChoices, transactionNameOptions, saving, stor
               {(!draft.name || !transactionNameOptions.includes(draft.name)) && <input type="text" value={draft.name || ""} onChange={(event) => onChange("name", event.target.value)} placeholder="พิมพ์ชื่อรายการ" disabled={fieldsDisabled} />}
             </label>
             <label>จำนวนเงิน (บาท)<input type="number" min="0" step="0.01" value={draft.amount ?? ""} onChange={(event) => onChange("amount", event.target.value)} disabled={fieldsDisabled} /></label>
-            <div className="form-two-col"><label>หมวดหมู่<select value={draft.category || "อื่นๆ"} onChange={(event) => onChange("category", event.target.value)} disabled={fieldsDisabled}>{categoryOptions.map((item) => <option key={item}>{item}</option>)}</select></label><label>ช่องทางจ่าย<select value={draft.channel || "อื่นๆ"} onChange={(event) => onChange("channel", event.target.value)} disabled={fieldsDisabled}>{channelOptions.map((item) => <option key={item}>{item}</option>)}</select></label></div>
+            <div className="form-two-col"><CategorySelect label="หมวดหมู่" scope="transactions" value={draft.category || "อื่นๆ"} options={availableCategories} disabled={fieldsDisabled} onChange={(value) => onChange("category", value)} onAddCategory={onAddCategory} /><label>ช่องทางจ่าย<select value={draft.channel || "อื่นๆ"} onChange={(event) => onChange("channel", event.target.value)} disabled={fieldsDisabled}>{channelOptions.map((item) => <option key={item}>{item}</option>)}</select></label></div>
             <label>เดือนงบประมาณ<select value={draft.budgetMonth || getCurrentMonthValue()} onChange={(event) => onChange("budgetMonth", event.target.value)} disabled={fieldsDisabled}>{monthChoices.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
             <label>หมายเหตุ<textarea rows="2" value={draft.note || ""} onChange={(event) => onChange("note", event.target.value)} disabled={fieldsDisabled} /></label>
             {draft.ocrText && <details className="ocr-text-details"><summary>ดูข้อความที่ OCR อ่านได้</summary><pre>{draft.ocrText}</pre></details>}

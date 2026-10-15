@@ -91,7 +91,7 @@ export function prepareInstallmentPlan(input) {
         amount: Number(item.amount || 0),
         paid: Boolean(item.paid),
         paidAt: String(item.paidAt || ""),
-      }))
+      })).filter((item) => item.installmentNumber <= plan.months)
     : buildInstallmentSchedule(plan);
   return plan;
 }

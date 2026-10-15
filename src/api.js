@@ -137,6 +137,56 @@ export async function listInstallments() {
   return result.installments;
 }
 
+export async function listDebts() {
+  const result = await requestJson("/api/debts");
+  if (!Array.isArray(result?.debts)) throw new Error("รูปแบบข้อมูลทวงหนี้จาก Google Sheets ไม่ถูกต้อง");
+  return result.debts;
+}
+
+export async function saveDebt(debt) {
+  const result = await requestJson("/api/debts", {
+    method: "POST",
+    body: JSON.stringify({ debt }),
+  });
+  if (!result?.debt) throw new Error("Google Sheets ไม่ได้ยืนยันการบันทึกรายการทวงหนี้");
+  return result.debt;
+}
+
+export async function recordDebtPayment(payment) {
+  const result = await requestJson("/api/debts", {
+    method: "PATCH",
+    body: JSON.stringify(payment),
+  });
+  if (!result?.debt) throw new Error("Google Sheets ไม่ได้ยืนยันการบันทึกชำระหนี้");
+  return result.debt;
+}
+
+export async function getDebtEvidencePreview({ id, kind, index = 0, installmentNumber = 0 }, signal) {
+  const query = new URLSearchParams({
+    id: String(id),
+    kind: String(kind),
+    index: String(index),
+    installmentNumber: String(installmentNumber),
+  });
+  const response = await fetch("/api/debt-evidence?" + query.toString(), {
+    credentials: "same-origin",
+    cache: "no-store",
+    signal,
+    headers: { Accept: "image/*" },
+  });
+  if (!response.ok) {
+    let message = "เปิดภาพหลักฐานไม่สำเร็จ";
+    try {
+      const result = await response.json();
+      message = result.error || message;
+    } catch { /* Keep the short fallback message for non-JSON errors. */ }
+    throw new Error(message);
+  }
+  const blob = await response.blob();
+  if (!blob.type.startsWith("image/")) throw new Error("ไฟล์นี้ไม่สามารถแสดงตัวอย่างได้");
+  return { url: URL.createObjectURL(blob), mimeType: blob.type };
+}
+
 export async function saveInstallment(plan) {
   const result = await requestJson("/api/installments", {
     method: "POST",
@@ -231,4 +281,19 @@ export async function restoreRecurringExpense(id) {
   });
   if (!result?.restored) throw new Error("เซิร์ฟเวอร์ยืนยันการคืนรายจ่ายประจำไม่สำเร็จ");
   return result;
+}
+
+export async function listCategories() {
+  const result = await requestJson("/api/categories");
+  if (!Array.isArray(result?.categories)) throw new Error("รูปแบบหมวดหมู่จาก Google Sheets ไม่ถูกต้อง");
+  return result.categories;
+}
+
+export async function saveCategory(category) {
+  const result = await requestJson("/api/categories", {
+    method: "POST",
+    body: JSON.stringify({ category }),
+  });
+  if (!result?.category) throw new Error("Google Sheets ไม่ได้ยืนยันการบันทึกหมวดหมู่");
+  return result.category;
 }

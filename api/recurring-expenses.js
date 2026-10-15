@@ -2,8 +2,6 @@ import { randomUUID } from "node:crypto";
 import { callAppsScript } from "../lib/server/apps-script.js";
 import { isSameOriginRequest, requireSession, setNoStore } from "../lib/server/session.js";
 
-const CATEGORIES = new Set(["บ้านและที่พัก", "สาธารณูปโภค", "ประกัน", "สุขภาพ", "การศึกษา", "อื่นๆ"]);
-
 function validMonth(value) {
   return typeof value === "string" && /^\d{4}-(0[1-9]|1[0-2])$/.test(value);
 }
@@ -21,7 +19,7 @@ function normalizeRecurringExpense(input) {
   if (!name || !Number.isFinite(amount) || amount <= 0 || amount > 100_000_000) {
     throw new Error("กรุณาระบุชื่อรายการและจำนวนเงินต่อเดือนให้ถูกต้อง");
   }
-  if (!CATEGORIES.has(category) || !Number.isInteger(dueDay) || dueDay < 1 || dueDay > 31) {
+  if (!category || category.length > 40 || /^[=+\-@]/.test(category) || /[\u0000-\u001f\u007f]/.test(category) || !Number.isInteger(dueDay) || dueDay < 1 || dueDay > 31) {
     throw new Error("กรุณาเลือกหมวดหมู่และวันที่ชำระให้ถูกต้อง");
   }
   if (!validMonth(startMonth) || (endMonth && (!validMonth(endMonth) || endMonth < startMonth))) {
