@@ -83,16 +83,51 @@ function normalizeDebt(input) {
 
 function normalizePayment(body) {
   const debtId = String(body?.id || "").trim();
+  const eventId = String(body?.eventId || "EVENT-" + randomUUID()).trim();
+  const eventType = body?.eventType === "earlyClose" ? "earlyClose" : "installment";
   const installmentNumber = Number(body?.installmentNumber);
+  const amount = body?.amount === undefined || body?.amount === null || body?.amount === "" ? null : Math.round(Number(body.amount) * 100) / 100;
   const paidAt = String(body?.paidAt || "");
   const note = String(body?.note || "").trim();
   const evidence = normalizeImages(body?.evidence, true);
   const signature = normalizeSignature(body?.signature);
   if (!ID_PATTERN.test(debtId)) throw new Error("ไม่พบรายการทวงหนี้");
-  if (!Number.isInteger(installmentNumber) || installmentNumber < 1 || installmentNumber > 120) throw new Error("งวดที่เลือกไม่ถูกต้อง");
+  if (!ID_PATTERN.test(eventId)) throw new Error("รหัสหลักฐานไม่ถูกต้อง");
+  if (eventType === "earlyClose" ? installmentNumber !== 0 : !Number.isInteger(installmentNumber) || installmentNumber < 1 || installmentNumber > 120) throw new Error("งวดที่เลือกไม่ถูกต้อง");
+  if (amount !== null && (!Number.isFinite(amount) || amount <= 0 || amount > 100_000_000)) throw new Error("จำนวนเงินที่รับไม่ถูกต้อง");
   if (!validDate(paidAt) || paidAt > todayInBangkok()) throw new Error("วันที่ชำระไม่ถูกต้อง");
   if (note.length > 300) throw new Error("หมายเหตุการชำระต้องไม่เกิน 300 ตัวอักษร");
-  return { debtId, installmentNumber, paidAt, evidence, signature, note };
+  return { eventId, eventType, debtId, installmentNumber, amount, paidAt, evidence, signature, note };
+}
+
+function normalizeDebtEvent(input) {
+  const eventId = String(input?.eventId || "").trim();
+  const debtId = String(input?.debtId || "").trim();
+  const type = String(input?.type || "");
+  const referenceId = String(input?.referenceId || debtId).trim();
+  const note = String(input?.note || "").trim();
+  if (!ID_PATTERN.test(eventId) || !ID_PATTERN.test(debtId)) throw new Error("รหัสบันทึกไม่ถูกต้อง");
+  if (!["clarification", "cancellation", "correction"].includes(type)) throw new Error("ประเภทบันทึกไม่ถูกต้อง");
+  if (!ID_PATTERN.test(referenceId)) throw new Error("รายการอ้างอิงไม่ถูกต้อง");
+  if (referenceId !== debtId) throw new Error("บันทึกนี้ต้องอ้างอิงรายการทวงหนี้เดิม");
+  if (note.length < 3 || note.length > 500) throw new Error("กรุณาระบุเหตุผลอย่างน้อย 3 ตัวอักษร และไม่เกิน 500 ตัวอักษร");
+  if (type === "correction") {
+    const allowed = new Set(["lender", "borrower", "loanDate", "principal", "hasInterest", "interestRate", "installments", "priority", "note"]);
+    const changes = input.changes && typeof input.changes === "object" && !Array.isArray(input.changes) ? input.changes : null;
+    const expected = input.expected && typeof input.expected === "object" && !Array.isArray(input.expected) ? input.expected : null;
+    if (!changes || !Object.keys(changes).length || Object.keys(changes).some((key) => !allowed.has(key))) throw new Error("เลือกข้อมูลที่ต้องการแก้ไขให้ถูกต้อง");
+    if (!expected) throw new Error("ข้อมูลต้นฉบับสำหรับตรวจสอบการแก้ไขไม่ครบ");
+    const fields = ["lender", "borrower", "loanDate", "principal", "hasInterest", "interestRate", "installments", "priority", "note"];
+    const expectedDebt = normalizeDebt({ ...expected, id: debtId, loanEvidence: [], lenderSignature: null });
+    const revisedDebt = normalizeDebt({ ...expectedDebt, ...changes, loanEvidence: [], lenderSignature: null });
+    const normalizedExpected = Object.fromEntries(fields.map((key) => [key, expectedDebt[key]]));
+    const normalizedChanges = Object.fromEntries(Object.keys(changes)
+      .filter((key) => revisedDebt[key] !== expectedDebt[key])
+      .map((key) => [key, revisedDebt[key]]));
+    if (!Object.keys(normalizedChanges).length) throw new Error("ยังไม่มีข้อมูลที่เปลี่ยนแปลง");
+    return { eventId, debtId, type, referenceId, note, expected: normalizedExpected, changes: normalizedChanges };
+  }
+  return { eventId, debtId, type, referenceId, note };
 }
 
 export default async function handler(req, res) {
@@ -109,6 +144,12 @@ export default async function handler(req, res) {
       return res.status(200).json({ debts: result.debts || [] });
     }
     if (req.method === "POST") {
+      if (req.body?.event) {
+        action = "recordDebtEvent";
+        const event = normalizeDebtEvent(req.body.event);
+        const result = await callAppsScript({ action, requestId, event });
+        return res.status(201).json({ debt: result.debt });
+      }
       action = "saveDebt";
       const debt = normalizeDebt(req.body?.debt);
       const result = await callAppsScript({ action, requestId, debt });
@@ -124,7 +165,7 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: "Method not allowed" });
   } catch (error) {
     const message = error instanceof Error ? error.message : "บันทึกข้อมูลทวงหนี้ไม่สำเร็จ";
-    const validationError = /กรุณา|ไม่ถูกต้อง|ไม่พบรายการ|ไม่ก่อน|ต้องอยู่|ต้องไม่|รองรับ|แนบรูป|ใหญ่เกินไป|ไม่เกิน/.test(message);
+    const validationError = /กรุณา|ไม่ถูกต้อง|ให้ถูกต้อง|เลือกข้อมูล|ไม่ครบ|ไม่มีข้อมูลเปลี่ยนแปลง|ไม่พบรายการ|ไม่ก่อน|ต้องอยู่|ต้องไม่|รองรับ|แนบรูป|ใหญ่เกินไป|ไม่เกิน|ยกเลิกไม่ได้|เกินยอดคงเหลือ|ปิดหรือยกเลิกแล้ว|อ้างอิงรายการทวงหนี้เดิม|แก้ไขไม่ได้|ถูกแก้ไข|รับชำระแล้ว|ไม่สามารถ/.test(message);
     if (!validationError) console.error("Debts API request failed", { requestId, action, code: String(error?.code || "UPSTREAM_ERROR") });
     return res.status(validationError ? 400 : 502).json({
       error: validationError ? message : "เชื่อมต่อรายการทวงหนี้กับ Google Sheets/Drive ไม่สำเร็จ",

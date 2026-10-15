@@ -37,6 +37,7 @@ import {
   listDebts as listGoogleDebts,
   saveDebt as saveGoogleDebt,
   recordDebtPayment as recordGoogleDebtPayment,
+  recordDebtEvent as recordGoogleDebtEvent,
   getDebtEvidencePreview as getGoogleDebtEvidencePreview,
   listSubscriptions as listGoogleSubscriptions,
   removeInstallment as removeGoogleInstallment,
@@ -60,7 +61,7 @@ import { readReceipt } from "./receipt-ocr";
 import RecurringExpensesView from "./RecurringExpensesView";
 import { recurringExpenseCategories, recurringExpenseMonthValues, summarizeFixedCommitments } from "./recurring-expenses";
 import DebtCollectionView from "./DebtCollectionView";
-import { buildDebtSchedule, makeDebtId, summarizeDebt, validateDebtInput } from "./debts";
+import { makeDebtId, summarizeDebt, validateDebtEventInput, validateDebtInput, validateDebtPaymentInput } from "./debts";
 
 const navItems = [
   { key: "overview", label: "ภาพรวม", shortLabel: "ภาพรวม", icon: "grid" },
@@ -760,6 +761,7 @@ function App() {
         ...debtInput,
         createdAt: new Date().toISOString(),
         payments: [],
+        events: [],
       };
       const saved = runtime.mode === "google" ? await saveGoogleDebt(created) : created;
       setDebts((current) => [saved, ...current.filter((item) => item.id !== saved.id)]);
@@ -784,29 +786,16 @@ function App() {
       setToast("ไม่พบรายการทวงหนี้นี้แล้ว กรุณาโหลดรายการใหม่");
       return false;
     }
-    const busyKey = input.id + ":" + input.installmentNumber;
+    const busyKey = input.id + ":" + (input.eventType === "earlyClose" ? "close" : input.installmentNumber);
     setPayingDebt(busyKey);
     try {
       let saved;
       if (runtime.mode === "google") {
         saved = await recordGoogleDebtPayment(input);
       } else {
-        const summaryForDebt = summarizeDebt(debt);
-        const scheduled = summaryForDebt.schedule.find((item) => item.installmentNumber === input.installmentNumber);
-        if (!scheduled || scheduled.paid) throw new Error("งวดนี้บันทึกการชำระแล้ว");
-        const payment = {
-          installmentNumber: scheduled.installmentNumber,
-          paidAt: input.paidAt,
-          evidence: input.evidence,
-          signature: input.signature,
-          note: input.note || "",
-        };
+        const payment = validateDebtPaymentInput(input, debt);
         const payments = [...(debt.payments || []), payment];
-        saved = {
-          ...debt,
-          payments,
-          schedule: buildDebtSchedule({ ...debt, payments }),
-        };
+        saved = { ...debt, payments };
         const summary = summarizeDebt(saved);
         Object.assign(saved, {
           totalAmount: summary.totalAmount,
@@ -817,7 +806,7 @@ function App() {
         });
       }
       setDebts((current) => current.map((item) => item.id === saved.id ? saved : item));
-      setToast(saved.complete ? "รับชำระครบแล้ว · เก็บหลักฐานและลายเซ็นไว้เรียบร้อย" : "บันทึกการชำระงวดนี้พร้อมหลักฐานแล้ว");
+      setToast(saved.complete ? "ปิดยอดหนี้เรียบร้อย · เก็บหลักฐานและลายเซ็นไว้แล้ว" : "บันทึกรับชำระแล้ว · ยอดคงเหลืออัปเดตเรียบร้อย");
       return true;
     } catch (error) {
       setToast(error.message || "บันทึกการชำระไม่สำเร็จ · ตรวจสอบการเชื่อมต่อแล้วลองอีกครั้ง");
@@ -827,11 +816,43 @@ function App() {
     }
   }
 
+  async function recordDebtEvent(input) {
+    if (savingDebt || payingDebt) return false;
+    if (runtime.mode === "google" && !debtSync.ready) {
+      setToast("ยังบันทึกประวัติข้ามอุปกรณ์ไม่ได้ กรุณาตรวจการเชื่อมต่อ Google Sheets ก่อน");
+      return false;
+    }
+    const debt = debts.find((item) => item.id === input.debtId);
+    if (!debt) {
+      setToast("ไม่พบรายการทวงหนี้นี้แล้ว กรุณาโหลดรายการใหม่");
+      return false;
+    }
+    setSavingDebt(true);
+    try {
+      const event = validateDebtEventInput(input, debt);
+      const saved = runtime.mode === "google" ? await recordGoogleDebtEvent(event) : {
+        ...debt,
+        ...(event.type === "correction" ? event.changes : {}),
+        events: [...(debt.events || []), event],
+      };
+      setDebts((current) => current.map((item) => item.id === saved.id ? saved : item));
+      setToast(event.type === "cancellation" ? "บันทึกการยกเลิกพร้อมเหตุผลแล้ว · เก็บต้นฉบับไว้ในประวัติ" : event.type === "correction" ? "แก้ไขรายการแล้ว · เก็บรายละเอียดก่อนและหลังไว้ในประวัติ" : "เพิ่มบันทึกชี้แจงไว้กับรายการเดิมแล้ว");
+      return true;
+    } catch (error) {
+      setToast(error.message || "บันทึกประวัติไม่สำเร็จ");
+      return false;
+    } finally {
+      setSavingDebt(false);
+    }
+  }
+
   async function loadDebtEvidence(reference) {
     if (runtime.mode === "google") return getGoogleDebtEvidencePreview(reference);
     const debt = debts.find((item) => item.id === reference.id);
     if (!debt) throw new Error("ไม่พบรายการทวงหนี้");
-    const payment = (debt.payments || []).find((item) => Number(item.installmentNumber) === Number(reference.installmentNumber));
+    const payment = reference.paymentId
+      ? (debt.payments || []).find((item) => item.eventId === reference.paymentId)
+      : (debt.payments || []).find((item) => Number(item.installmentNumber) === Number(reference.installmentNumber));
     let media = null;
     if (reference.kind === "loan-photo") media = debt.loanEvidence?.[reference.index];
     else if (reference.kind === "loan-signature") media = debt.lenderSignature;
@@ -1229,6 +1250,7 @@ function App() {
               onRetrySync={retryDebtSync}
               onCreate={createDebt}
               onRecordPayment={recordDebtPayment}
+              onRecordEvent={recordDebtEvent}
               onLoadEvidence={loadDebtEvidence}
               onSettings={() => setShowSettings(true)}
             />

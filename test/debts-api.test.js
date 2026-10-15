@@ -107,6 +107,89 @@ test("PATCH /api/debts requires a repayment photo and signature before forwardin
   });
 });
 
+test("POST /api/debts appends a linked clarification event", async () => {
+  await withApiConfig(async () => {
+    let forwarded;
+    globalThis.fetch = async (_url, options) => {
+      forwarded = JSON.parse(options.body);
+      return new Response(JSON.stringify({ ok: true, data: { debt: { id: "DEBT-12345678", events: [] } } }), { status: 200, headers: { "Content-Type": "application/json" } });
+    };
+    const response = createResponse();
+    await handler(createRequest("POST", {
+      event: { eventId: "EVENT-12345678", debtId: "DEBT-12345678", type: "clarification", referenceId: "DEBT-12345678", note: "ชี้แจงรายการเดิม" },
+    }), response);
+
+    assert.equal(response.statusCode, 201);
+    assert.equal(forwarded.action, "recordDebtEvent");
+    assert.equal(forwarded.event.referenceId, forwarded.event.debtId);
+  });
+});
+
+test("POST /api/debts validates and forwards an auditable correction event", async () => {
+  await withApiConfig(async () => {
+    let forwarded;
+    globalThis.fetch = async (_url, options) => {
+      forwarded = JSON.parse(options.body);
+      return new Response(JSON.stringify({ ok: true, data: { debt: { id: "DEBT-12345678", borrower: "ผู้ยืมใหม่" } } }), { status: 200, headers: { "Content-Type": "application/json" } });
+    };
+    const response = createResponse();
+    await handler(createRequest("POST", {
+      event: {
+        eventId: "EVENT-12345678",
+        debtId: "DEBT-12345678",
+        type: "correction",
+        referenceId: "DEBT-12345678",
+        note: "แก้ชื่อผู้ยืม",
+        expected: {
+          id: "DEBT-87654321",
+          lender: "ฉัน", borrower: "ผู้ยืมเดิม", loanDate: "2025-10-01", principal: 1000,
+          hasInterest: false, interestRate: 0, installments: 3, priority: "normal", note: "",
+        },
+        changes: { borrower: "ผู้ยืมใหม่" },
+      },
+    }), response);
+
+    assert.equal(response.statusCode, 201);
+    assert.equal(forwarded.action, "recordDebtEvent");
+    assert.equal(forwarded.event.type, "correction");
+    assert.equal(forwarded.event.expected.borrower, "ผู้ยืมเดิม");
+    assert.equal(forwarded.event.changes.borrower, "ผู้ยืมใหม่");
+    assert.equal(Object.hasOwn(forwarded.event.expected, "id"), false);
+  });
+});
+
+test("POST /api/debts rejects correction attempts to change unapproved fields", async () => {
+  await withApiConfig(async () => {
+    let wasForwarded = false;
+    globalThis.fetch = async () => { wasForwarded = true; };
+    const response = createResponse();
+    await handler(createRequest("POST", {
+      event: {
+        eventId: "EVENT-12345678", debtId: "DEBT-12345678", type: "correction", referenceId: "DEBT-12345678", note: "แก้รายการ",
+        expected: { lender: "ฉัน", borrower: "ผู้ยืมเดิม", loanDate: "2025-10-01", principal: 1000, hasInterest: false, interestRate: 0, installments: 3, priority: "normal", note: "" },
+        changes: { loanEvidence: [] },
+      },
+    }), response);
+
+    assert.equal(response.statusCode, 400);
+    assert.equal(wasForwarded, false);
+  });
+});
+
+test("POST /api/debts rejects an event linked to a different record", async () => {
+  await withApiConfig(async () => {
+    let wasForwarded = false;
+    globalThis.fetch = async () => { wasForwarded = true; };
+    const response = createResponse();
+    await handler(createRequest("POST", {
+      event: { eventId: "EVENT-12345678", debtId: "DEBT-12345678", type: "clarification", referenceId: "DEBT-87654321", note: "ชี้แจงรายการเดิม" },
+    }), response);
+
+    assert.equal(response.statusCode, 400);
+    assert.equal(wasForwarded, false);
+  });
+});
+
 test("PUT and DELETE are not supported for immutable debt records", async () => {
   await withApiConfig(async () => {
     const put = createResponse();

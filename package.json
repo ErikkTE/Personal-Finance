@@ -7,7 +7,11 @@
     "dev": "vite --configLoader native",
     "build": "vite build --configLoader native",
     "preview": "vite preview --configLoader native",
-    "test": "node --test"
+    "test": "node --test",
+    "apps-script:inspect": "node scripts/apps-script-api.mjs inspect",
+    "apps-script:sync": "node scripts/apps-script-api.mjs sync",
+    "apps-script:deploy": "node scripts/apps-script-api.mjs deploy",
+    "apps-script:auth": "node scripts/apps-script-oauth.mjs login"
   },
   "dependencies": {
     "@phosphor-icons/react": "^2.1.10",
