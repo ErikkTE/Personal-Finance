@@ -148,6 +148,9 @@ test("cancellation stays separate from repayment and must refer to its source de
   assert.equal(summary.status, "cancelled");
   assert.equal(summary.dueThisMonthCount, 0);
   assert.equal(validateDebtEventInput({
+    eventId: "EVENT-62345678", type: "cancellation", referenceId: debt.id, note: "สร้างรายการซ้ำ",
+  }, { ...debt, events: [] }, "2026-10-15").type, "cancellation");
+  assert.equal(validateDebtEventInput({
     eventId: "EVENT-32345678", type: "clarification", referenceId: debt.id, note: "ชี้แจงยอดเดิม",
   }, { ...debt, events: [] }, "2026-10-15").type, "clarification");
   assert.throws(() => validateDebtEventInput({

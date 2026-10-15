@@ -125,6 +125,25 @@ test("POST /api/debts appends a linked clarification event", async () => {
   });
 });
 
+test("POST /api/debts accepts and forwards a cancellation event", async () => {
+  await withApiConfig(async () => {
+    let forwarded;
+    globalThis.fetch = async (_url, options) => {
+      forwarded = JSON.parse(options.body);
+      return new Response(JSON.stringify({ ok: true, data: { debt: { id: "DEBT-12345678", events: [{ type: "cancellation" }] } } }), { status: 200, headers: { "Content-Type": "application/json" } });
+    };
+    const response = createResponse();
+    await handler(createRequest("POST", {
+      event: { eventId: "EVENT-62345678", debtId: "DEBT-12345678", type: "cancellation", referenceId: "DEBT-12345678", note: "สร้างรายการซ้ำ" },
+    }), response);
+
+    assert.equal(response.statusCode, 201);
+    assert.equal(forwarded.action, "recordDebtEvent");
+    assert.equal(forwarded.event.type, "cancellation");
+    assert.equal(forwarded.event.referenceId, forwarded.event.debtId);
+  });
+});
+
 test("POST /api/debts validates and forwards an auditable correction event", async () => {
   await withApiConfig(async () => {
     let forwarded;
