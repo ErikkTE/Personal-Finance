@@ -18,8 +18,10 @@ export default async function handler(req, res) {
   const kind = String(req.query?.kind || "");
   const index = Number(req.query?.index ?? 0);
   const installmentNumber = Number(req.query?.installmentNumber || 0);
+  const paymentId = String(req.query?.paymentId || "").trim();
   if (!ID_PATTERN.test(debtId) || !KINDS.has(kind) || !Number.isInteger(index) || index < 0 || index > 2 ||
-    ((kind.startsWith("payment-")) && (!Number.isInteger(installmentNumber) || installmentNumber < 1 || installmentNumber > 120))) {
+    (kind.startsWith("payment-") && !paymentId && (!Number.isInteger(installmentNumber) || installmentNumber < 1 || installmentNumber > 120)) ||
+    (paymentId && !ID_PATTERN.test(paymentId))) {
     return res.status(400).json({ error: "ไม่พบหลักฐานที่เลือก" });
   }
 
@@ -31,6 +33,7 @@ export default async function handler(req, res) {
       kind,
       index,
       installmentNumber,
+      paymentId,
     });
     const data = Buffer.from(String(result?.base64 || ""), "base64");
     const mimeType = String(result?.mimeType || "").toLowerCase();

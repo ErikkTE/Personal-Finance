@@ -6,6 +6,7 @@ const TAB_RECURRING_EXPENSES = "Recurring Expenses";
 const TAB_APP_CATEGORIES = "App Categories";
 const TAB_DEBTS = "Debts";
 const TAB_DEBT_PAYMENTS = "Debt Payments";
+const TAB_DEBT_EVENTS = "Debt Events";
 const APP_CATEGORY_HEADERS = ["ขอบเขต", "หมวดหมู่", "วันที่สร้าง"];
 const INSTALLMENT_HEADERS = ["Installment ID", "รายการสินค้า", "ราคาสินค้า", "เงินดาวน์", "ดอกเบี้ยรวม (%)", "จำนวนเดือน", "ธนาคาร", "เดือนเริ่มชำระ", "ยอดรวม", "วันที่บันทึก", "ลบเมื่อ"];
 const INSTALLMENT_PAYMENT_HEADERS = ["Installment ID", "งวดที่", "เดือนครบกำหนด", "จำนวนเงิน", "ชำระแล้ว", "วันที่ชำระ"];
@@ -13,6 +14,8 @@ const SUBSCRIPTION_HEADERS = ["Subscription ID", "ชื่อบริการ
 const RECURRING_EXPENSE_HEADERS = ["Recurring Expense ID", "ชื่อรายการ", "จำนวนเงินต่อเดือน", "หมวดหมู่", "วันที่ชำระ", "เดือนเริ่ม", "เดือนสิ้นสุด", "หมายเหตุ", "วันที่บันทึก", "ลบเมื่อ"];
 const DEBT_HEADERS = ["Debt ID", "ผู้ให้ยืม", "ผู้ยืม", "วันที่ยืม", "เงินต้น", "มีดอกเบี้ย", "ดอกเบี้ยรวม (%)", "จำนวนงวด", "ความสำคัญ", "หมายเหตุ", "รูปหลักฐานการยืม (JSON)", "ลายเซ็นผู้ยืม (JSON)", "วันที่บันทึก"];
 const DEBT_PAYMENT_HEADERS = ["Debt ID", "งวดที่", "วันครบกำหนด", "จำนวนเงิน", "วันที่ชำระ", "รูปหลักฐานการชำระ (JSON)", "ลายเซ็นผู้รับเงิน (JSON)", "หมายเหตุ", "Request ID"];
+const DEBT_EVENT_HEADERS = ["Event ID", "Debt ID", "ประเภทเหตุการณ์", "งวดที่", "วันที่บันทึก", "จำนวนเงิน", "อ้างอิง Event ID", "รายละเอียด", "รูปหลักฐาน (JSON)", "ลายเซ็น (JSON)", "Request ID"];
+const DEBT_EDIT_FIELDS = ["lender", "borrower", "loanDate", "principal", "hasInterest", "interestRate", "installments", "priority", "note"];
 const PREVIOUS_STATUS_HEADER = "สถานะก่อนซ่อน";
 const RESTORABLE_STATUSES = ["ยืนยันแล้ว", "รอตรวจสอบ"];
 const REQUIRED_HEADERS = [
@@ -72,8 +75,11 @@ function doPost(event) {
       case "recordDebtPayment":
         data = recordDebtPayment_(request.payment, request.requestId);
         break;
+      case "recordDebtEvent":
+        data = recordDebtEvent_(request.event, request.requestId);
+        break;
       case "getDebtEvidence":
-        data = getDebtEvidence_(request.debtId, request.kind, request.index, request.installmentNumber);
+        data = getDebtEvidence_(request.debtId, request.kind, request.index, request.installmentNumber, request.paymentId);
         break;
       case "saveInstallment":
         data = saveInstallment_(request.installment);
@@ -211,11 +217,15 @@ function listDebts_() {
   const sheets = ensureDebtSheets_();
   const debtSheet = sheets.debts;
   const paymentSheet = sheets.payments;
+  const eventSheet = sheets.events;
   const debtHeaders = debtSheet.getRange(1, 1, 1, debtSheet.getLastColumn()).getDisplayValues()[0];
   const debtColumns = columnIndexes_(debtHeaders, DEBT_HEADERS, "Debts");
   const paymentHeaders = paymentSheet.getRange(1, 1, 1, paymentSheet.getLastColumn()).getDisplayValues()[0];
   const paymentColumns = columnIndexes_(paymentHeaders, DEBT_PAYMENT_HEADERS, "Debt Payments");
+  const eventHeaders = eventSheet.getRange(1, 1, 1, eventSheet.getLastColumn()).getDisplayValues()[0];
+  const eventColumns = columnIndexes_(eventHeaders, DEBT_EVENT_HEADERS, "Debt Events");
   const paymentsByDebt = {};
+  const eventsByDebt = {};
 
   if (paymentSheet.getLastRow() > 1) {
     const paymentRows = paymentSheet.getRange(2, 1, paymentSheet.getLastRow() - 1, paymentHeaders.length).getValues();
@@ -224,19 +234,61 @@ function listDebts_() {
       if (!id) return;
       if (!paymentsByDebt[id]) paymentsByDebt[id] = [];
       paymentsByDebt[id].push({
+        eventId: "",
+        eventType: "installment",
         installmentNumber: Number(readCell_(row, paymentColumns, "งวดที่") || 0),
+        amount: Number(readCell_(row, paymentColumns, "จำนวนเงิน") || 0),
         paidAt: dateToIso_(readCell_(row, paymentColumns, "วันที่ชำระ")),
         evidence: publicDebtEvidence_(parseDebtJson_(readCell_(row, paymentColumns, "รูปหลักฐานการชำระ (JSON)"), [])),
         signature: publicDebtEvidence_(parseDebtJson_(readCell_(row, paymentColumns, "ลายเซ็นผู้รับเงิน (JSON)"), null)),
         note: String(readCell_(row, paymentColumns, "หมายเหตุ") || ""),
+        legacy: true,
       });
+    });
+  }
+
+  if (eventSheet.getLastRow() > 1) {
+    const eventRows = eventSheet.getRange(2, 1, eventSheet.getLastRow() - 1, eventHeaders.length).getValues();
+    eventRows.forEach(function (row) {
+      const id = String(readCell_(row, eventColumns, "Debt ID") || "");
+      const eventId = String(readCell_(row, eventColumns, "Event ID") || "");
+      const type = String(readCell_(row, eventColumns, "ประเภทเหตุการณ์") || "");
+      if (!id || !eventId || !type) return;
+      if (type === "installment" || type === "earlyClose") {
+        if (!paymentsByDebt[id]) paymentsByDebt[id] = [];
+        paymentsByDebt[id].push({
+          eventId: eventId,
+          eventType: type,
+          installmentNumber: Number(readCell_(row, eventColumns, "งวดที่") || 0),
+          amount: Number(readCell_(row, eventColumns, "จำนวนเงิน") || 0),
+          paidAt: dateToIso_(readCell_(row, eventColumns, "วันที่บันทึก")),
+          evidence: publicDebtEvidence_(parseDebtJson_(readCell_(row, eventColumns, "รูปหลักฐาน (JSON)"), [])),
+          signature: publicDebtEvidence_(parseDebtJson_(readCell_(row, eventColumns, "ลายเซ็น (JSON)"), null)),
+          note: String(readCell_(row, eventColumns, "รายละเอียด") || ""),
+        });
+      } else if (type === "clarification" || type === "cancellation" || type === "correction") {
+        if (!eventsByDebt[id]) eventsByDebt[id] = [];
+        const detailText = String(readCell_(row, eventColumns, "รายละเอียด") || "");
+        const correction = type === "correction" ? parseDebtJson_(detailText, null) : null;
+        eventsByDebt[id].push({
+          id: eventId,
+          type: type,
+          referenceId: String(readCell_(row, eventColumns, "อ้างอิง Event ID") || id),
+          createdAt: dateToIso_(readCell_(row, eventColumns, "วันที่บันทึก")),
+          note: correction && correction.note ? String(correction.note) : detailText,
+          before: correction && correction.before ? correction.before : null,
+          after: correction && correction.after ? correction.after : null,
+          changes: correction && correction.changes ? correction.changes : null,
+        });
+      }
     });
   }
 
   if (debtSheet.getLastRow() < 2) return [];
   const debtRows = debtSheet.getRange(2, 1, debtSheet.getLastRow() - 1, debtHeaders.length).getValues();
   return debtRows.map(function (row) {
-    return debtFromRow_(row, debtColumns, paymentsByDebt[String(readCell_(row, debtColumns, "Debt ID") || "")] || []);
+    const id = String(readCell_(row, debtColumns, "Debt ID") || "");
+    return debtFromRow_(row, debtColumns, paymentsByDebt[id] || [], eventsByDebt[id] || []);
   }).filter(function (debt) {
     return Boolean(debt.id);
   }).reverse();
@@ -295,58 +347,169 @@ function recordDebtPayment_(input, requestId) {
   lock.waitLock(15000);
   try {
     const sheets = ensureDebtSheets_();
-    const debtSheet = sheets.debts;
-    const debtHeaders = debtSheet.getRange(1, 1, 1, debtSheet.getLastColumn()).getDisplayValues()[0];
-    const debtColumns = columnIndexes_(debtHeaders, DEBT_HEADERS, "Debts");
-    const debtRowNumber = findInstallmentRow_(debtSheet, debtColumns["Debt ID"], payment.debtId);
-    if (debtRowNumber < 2) throw new Error("Debt was not found");
-    const debtRow = debtSheet.getRange(debtRowNumber, 1, 1, debtHeaders.length).getValues()[0];
-    const debt = debtFromRow_(debtRow, debtColumns, []);
+    const eventSheet = sheets.events;
+    const eventHeaders = eventSheet.getRange(1, 1, 1, eventSheet.getLastColumn()).getDisplayValues()[0];
+    const eventColumns = columnIndexes_(eventHeaders, DEBT_EVENT_HEADERS, "Debt Events");
+    const duplicateEvent = findDebtEventRow_(eventSheet, eventColumns, payment.eventId);
+    if (duplicateEvent > 0) {
+      const existing = eventSheet.getRange(duplicateEvent, 1, 1, eventHeaders.length).getValues()[0];
+      if (String(readCell_(existing, eventColumns, "Debt ID") || "") !== payment.debtId) throw new Error("Event ID is already used by another debt");
+      return { debt: getDebtById_(payment.debtId) };
+    }
+
+    const debt = getDebtById_(payment.debtId);
     if (payment.paidAt < debt.loanDate) throw new Error("วันที่ชำระต้องไม่ก่อนวันที่ยืม");
-
-    const paymentSheet = sheets.payments;
-    const paymentHeaders = paymentSheet.getRange(1, 1, 1, paymentSheet.getLastColumn()).getDisplayValues()[0];
-    const paymentColumns = columnIndexes_(paymentHeaders, DEBT_PAYMENT_HEADERS, "Debt Payments");
-    const existingPaymentRow = findDebtPaymentRow_(paymentSheet, paymentColumns, payment.debtId, payment.installmentNumber);
-    if (existingPaymentRow > 0) return { debt: getDebtById_(payment.debtId) };
-
+    if (debt.cancelled || debt.complete) throw new Error("รายการนี้ปิดหรือยกเลิกแล้ว");
     const schedule = buildDebtSchedule_(debt);
-    const scheduledPayment = schedule[payment.installmentNumber - 1];
-    if (!scheduledPayment) throw new Error("Debt installment was not found");
-    if (schedule.every(function (item) { return item.paid; })) throw new Error("Debt was already fully paid");
+    let maxAmount = 0;
+    if (payment.eventType === "earlyClose") {
+      maxAmount = debt.remainingAmount;
+    } else {
+      const scheduledPayment = schedule[payment.installmentNumber - 1];
+      if (!scheduledPayment || scheduledPayment.remainingAmount <= 0.005) throw new Error("งวดนี้ชำระครบแล้ว");
+      maxAmount = scheduledPayment.remainingAmount;
+    }
+    const receivedAmount = payment.amount === null ? maxAmount : payment.amount;
+    if (!Number.isFinite(receivedAmount) || receivedAmount <= 0 || receivedAmount > maxAmount + 0.005) {
+      throw new Error(payment.eventType === "earlyClose" ? "ยอดปิดหนี้ก่อนกำหนดเกินยอดคงเหลือ" : "ยอดรับเกินยอดคงเหลือของงวดนี้");
+    }
 
     const rootFolder = getDriveFolder_();
     const debtFolder = getDebtFolder_(payment.debtId, rootFolder);
     const paymentFolder = getOrCreateEvidenceFolder_(debtFolder, "02_การชำระ");
-    const installmentFolder = getOrCreateEvidenceFolder_(paymentFolder, "งวด-" + String(payment.installmentNumber).padStart(3, "0"));
+    const paymentLabel = payment.eventType === "earlyClose" ? "ปิดยอด-" + payment.eventId : "งวด-" + String(payment.installmentNumber).padStart(3, "0") + "-" + payment.eventId;
+    const installmentFolder = getOrCreateEvidenceFolder_(paymentFolder, paymentLabel);
     const evidence = payment.evidence.map(function (item, index) {
-      return saveDebtMedia_(item, installmentFolder, payment.debtId, "payment-" + payment.installmentNumber + "-photo-" + (index + 1), index);
+      return saveDebtMedia_(item, installmentFolder, payment.debtId, "payment-" + payment.eventId + "-photo-" + (index + 1), index);
     });
-    const signature = saveDebtMedia_(payment.signature, installmentFolder, payment.debtId, "payment-" + payment.installmentNumber + "-signature", 0);
-    const row = new Array(paymentHeaders.length).fill("");
-    putCell_(row, paymentColumns, "Debt ID", payment.debtId);
-    putCell_(row, paymentColumns, "งวดที่", payment.installmentNumber);
-    putCell_(row, paymentColumns, "วันครบกำหนด", scheduledPayment.dueDate);
-    putCell_(row, paymentColumns, "จำนวนเงิน", scheduledPayment.amount);
-    putCell_(row, paymentColumns, "วันที่ชำระ", payment.paidAt);
-    putCell_(row, paymentColumns, "รูปหลักฐานการชำระ (JSON)", JSON.stringify(evidence));
-    putCell_(row, paymentColumns, "ลายเซ็นผู้รับเงิน (JSON)", JSON.stringify(signature));
-    putCell_(row, paymentColumns, "หมายเหตุ", payment.note);
-    putCell_(row, paymentColumns, "Request ID", String(requestId || ""));
-    const rowNumber = Math.max(paymentSheet.getLastRow() + 1, 2);
-    ensureSheetRowCapacity_(paymentSheet, rowNumber);
-    paymentSheet.getRange(rowNumber, 1, 1, row.length).setValues([row]);
+    const signature = saveDebtMedia_(payment.signature, installmentFolder, payment.debtId, "payment-" + payment.eventId + "-signature", 0);
+    const row = new Array(eventHeaders.length).fill("");
+    putCell_(row, eventColumns, "Event ID", payment.eventId);
+    putCell_(row, eventColumns, "Debt ID", payment.debtId);
+    putCell_(row, eventColumns, "ประเภทเหตุการณ์", payment.eventType);
+    putCell_(row, eventColumns, "งวดที่", payment.installmentNumber);
+    putCell_(row, eventColumns, "วันที่บันทึก", payment.paidAt);
+    putCell_(row, eventColumns, "จำนวนเงิน", receivedAmount);
+    putCell_(row, eventColumns, "อ้างอิง Event ID", "");
+    putCell_(row, eventColumns, "รายละเอียด", payment.note);
+    putCell_(row, eventColumns, "รูปหลักฐาน (JSON)", JSON.stringify(evidence));
+    putCell_(row, eventColumns, "ลายเซ็น (JSON)", JSON.stringify(signature));
+    putCell_(row, eventColumns, "Request ID", String(requestId || ""));
+    const rowNumber = Math.max(eventSheet.getLastRow() + 1, 2);
+    ensureSheetRowCapacity_(eventSheet, rowNumber);
+    eventSheet.getRange(rowNumber, 1, 1, row.length).setValues([row]);
     return { debt: getDebtById_(payment.debtId) };
   } finally {
     lock.releaseLock();
   }
 }
 
-function getDebtEvidence_(debtId, kind, index, installmentNumber) {
+function recordDebtEvent_(input, requestId) {
+  if (!input || typeof input !== "object") throw new Error("Debt event is required");
+  const event = {
+    eventId: String(input.eventId || "").trim(),
+    debtId: String(input.debtId || "").trim(),
+    type: String(input.type || ""),
+    referenceId: String(input.referenceId || input.debtId || "").trim(),
+    note: String(input.note || "").trim(),
+    expected: input.expected,
+    changes: input.changes,
+  };
+  if (!/^[A-Za-z0-9_-]{8,80}$/.test(event.eventId) || !/^[A-Za-z0-9_-]{8,80}$/.test(event.debtId) ||
+    !["clarification", "cancellation", "correction"].includes(event.type) || !/^[A-Za-z0-9_-]{8,80}$/.test(event.referenceId) || event.note.length < 3 || event.note.length > 500) {
+    throw new Error("Debt event data is invalid");
+  }
+  if (event.referenceId !== event.debtId) throw new Error("Debt event must refer to its original record");
+  const lock = LockService.getScriptLock();
+  lock.waitLock(15000);
+  try {
+    const sheets = ensureDebtSheets_();
+    const eventSheet = sheets.events;
+    const eventHeaders = eventSheet.getRange(1, 1, 1, eventSheet.getLastColumn()).getDisplayValues()[0];
+    const eventColumns = columnIndexes_(eventHeaders, DEBT_EVENT_HEADERS, "Debt Events");
+    const duplicateEvent = findDebtEventRow_(eventSheet, eventColumns, event.eventId);
+    if (duplicateEvent > 0) {
+      const existing = eventSheet.getRange(duplicateEvent, 1, 1, eventHeaders.length).getValues()[0];
+      if (String(readCell_(existing, eventColumns, "Debt ID") || "") !== event.debtId) throw new Error("Event ID is already used by another debt");
+      return { debt: getDebtById_(event.debtId) };
+    }
+    const debt = getDebtById_(event.debtId);
+    let correction = null;
+    if (event.type === "correction") correction = validateDebtCorrection_(event, debt);
+    if (event.type === "cancellation" && (debt.cancelled || debt.complete || (debt.payments || []).length > 0)) {
+      throw new Error("ยกเลิกไม่ได้เมื่อมีการรับชำระแล้ว ให้เพิ่มบันทึกชี้แจงแทน");
+    }
+    const row = new Array(eventHeaders.length).fill("");
+    putCell_(row, eventColumns, "Event ID", event.eventId);
+    putCell_(row, eventColumns, "Debt ID", event.debtId);
+    putCell_(row, eventColumns, "ประเภทเหตุการณ์", event.type);
+    putCell_(row, eventColumns, "งวดที่", 0);
+    putCell_(row, eventColumns, "วันที่บันทึก", Utilities.formatDate(new Date(), "Asia/Bangkok", "yyyy-MM-dd"));
+    putCell_(row, eventColumns, "จำนวนเงิน", "");
+    putCell_(row, eventColumns, "อ้างอิง Event ID", event.referenceId);
+    putCell_(row, eventColumns, "รายละเอียด", correction ? JSON.stringify(correction) : event.note);
+    putCell_(row, eventColumns, "รูปหลักฐาน (JSON)", "[]");
+    putCell_(row, eventColumns, "ลายเซ็น (JSON)", "");
+    putCell_(row, eventColumns, "Request ID", String(requestId || ""));
+    const rowNumber = Math.max(eventSheet.getLastRow() + 1, 2);
+    ensureSheetRowCapacity_(eventSheet, rowNumber);
+    eventSheet.getRange(rowNumber, 1, 1, row.length).setValues([row]);
+    return { debt: getDebtById_(event.debtId) };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function debtEditSnapshot_(debt) {
+  return {
+    lender: String(debt.lender || "").trim(),
+    borrower: String(debt.borrower || "").trim(),
+    loanDate: String(debt.loanDate || ""),
+    principal: Math.round(Number(debt.principal || 0) * 100) / 100,
+    hasInterest: debt.hasInterest === true,
+    interestRate: debt.hasInterest === true ? Math.round(Number(debt.interestRate || 0) * 100) / 100 : 0,
+    installments: Number(debt.installments || 0),
+    priority: String(debt.priority || "normal"),
+    note: String(debt.note || "").trim(),
+  };
+}
+
+function validateDebtCorrection_(input, debt) {
+  if (debt.cancelled) throw new Error("รายการที่ยกเลิกแล้วแก้ไขไม่ได้");
+  const changes = input.changes && typeof input.changes === "object" && !Array.isArray(input.changes) ? input.changes : null;
+  if (!changes) throw new Error("เลือกข้อมูลที่ต้องการแก้ไขให้ถูกต้อง");
+  const keys = Object.keys(changes);
+  if (!keys.length || keys.some(function (key) { return DEBT_EDIT_FIELDS.indexOf(key) < 0; })) {
+    throw new Error("เลือกข้อมูลที่ต้องการแก้ไขให้ถูกต้อง");
+  }
+  const current = debtEditSnapshot_(debt);
+  const expected = input.expected && typeof input.expected === "object" && !Array.isArray(input.expected)
+    ? debtEditSnapshot_(input.expected)
+    : null;
+  if (!expected || JSON.stringify(expected) !== JSON.stringify(current)) {
+    throw new Error("รายการนี้ถูกแก้ไขไปแล้ว กรุณาโหลดข้อมูลใหม่ก่อนแก้ไข");
+  }
+  const financialFields = ["loanDate", "principal", "hasInterest", "interestRate", "installments"];
+  const financialChanged = keys.some(function (key) { return financialFields.indexOf(key) >= 0 && changes[key] !== current[key]; });
+  if (financialChanged && (debt.payments || []).length > 0) {
+    throw new Error("เริ่มรับชำระแล้ว จึงแก้เงื่อนไขยอดเงินและงวดไม่ได้");
+  }
+  const validated = validateDebt_(Object.assign({}, debt, changes, { loanEvidence: [], lenderSignature: null }));
+  const after = debtEditSnapshot_(validated);
+  const normalizedChanges = {};
+  keys.forEach(function (key) {
+    if (after[key] !== current[key]) normalizedChanges[key] = after[key];
+  });
+  if (!Object.keys(normalizedChanges).length) throw new Error("ยังไม่มีข้อมูลที่เปลี่ยนแปลง");
+  return { note: input.note, before: current, after: after, changes: normalizedChanges };
+}
+
+function getDebtEvidence_(debtId, kind, index, installmentNumber, paymentId) {
   const id = String(debtId || "").trim();
   const evidenceKind = String(kind || "");
   const evidenceIndex = Number(index || 0);
   const number = Number(installmentNumber || 0);
+  const eventId = String(paymentId || "").trim();
   if (!/^[A-Za-z0-9_-]{8,80}$/.test(id) || ["loan-photo", "loan-signature", "payment-photo", "payment-signature"].indexOf(evidenceKind) < 0) {
     throw new Error("Debt evidence request is invalid");
   }
@@ -363,18 +526,35 @@ function getDebtEvidence_(debtId, kind, index, installmentNumber) {
   } else if (evidenceKind === "loan-signature") {
     metadata = parseDebtJson_(readCell_(row, columns, "ลายเซ็นผู้ยืม (JSON)"), null);
   } else {
-    if (!Number.isInteger(number) || number < 1 || number > 120 || !Number.isInteger(evidenceIndex) || evidenceIndex < 0 || evidenceIndex > 2) {
+    if (!Number.isInteger(evidenceIndex) || evidenceIndex < 0 || evidenceIndex > 2 || (eventId && !/^[A-Za-z0-9_-]{8,80}$/.test(eventId))) {
       throw new Error("Debt evidence request is invalid");
     }
-    const paymentSheet = sheets.payments;
-    const paymentHeaders = paymentSheet.getRange(1, 1, 1, paymentSheet.getLastColumn()).getDisplayValues()[0];
-    const paymentColumns = columnIndexes_(paymentHeaders, DEBT_PAYMENT_HEADERS, "Debt Payments");
-    const paymentRowNumber = findDebtPaymentRow_(paymentSheet, paymentColumns, id, number);
-    if (paymentRowNumber < 2) throw new Error("Debt payment evidence was not found");
-    const paymentRow = paymentSheet.getRange(paymentRowNumber, 1, 1, paymentHeaders.length).getValues()[0];
+    let paymentRow;
+    let paymentColumns;
+    if (eventId) {
+      const eventSheet = sheets.events;
+      const eventHeaders = eventSheet.getRange(1, 1, 1, eventSheet.getLastColumn()).getDisplayValues()[0];
+      paymentColumns = columnIndexes_(eventHeaders, DEBT_EVENT_HEADERS, "Debt Events");
+      const paymentRowNumber = findDebtEventRow_(eventSheet, paymentColumns, eventId);
+      if (paymentRowNumber < 2) throw new Error("Debt payment evidence was not found");
+      paymentRow = eventSheet.getRange(paymentRowNumber, 1, 1, eventHeaders.length).getValues()[0];
+      if (String(readCell_(paymentRow, paymentColumns, "Debt ID") || "") !== id) throw new Error("Debt evidence does not match the selected record");
+    } else {
+      if (!Number.isInteger(number) || number < 1 || number > 120) throw new Error("Debt evidence request is invalid");
+      const paymentSheet = sheets.payments;
+      const paymentHeaders = paymentSheet.getRange(1, 1, 1, paymentSheet.getLastColumn()).getDisplayValues()[0];
+      paymentColumns = columnIndexes_(paymentHeaders, DEBT_PAYMENT_HEADERS, "Debt Payments");
+      const paymentRowNumber = findDebtPaymentRow_(paymentSheet, paymentColumns, id, number);
+      if (paymentRowNumber < 2) throw new Error("Debt payment evidence was not found");
+      paymentRow = paymentSheet.getRange(paymentRowNumber, 1, 1, paymentHeaders.length).getValues()[0];
+    }
     metadata = evidenceKind === "payment-photo"
-      ? parseDebtJson_(readCell_(paymentRow, paymentColumns, "รูปหลักฐานการชำระ (JSON)"), [])[evidenceIndex] || null
-      : parseDebtJson_(readCell_(paymentRow, paymentColumns, "ลายเซ็นผู้รับเงิน (JSON)"), null);
+      ? eventId
+        ? parseDebtJson_(readCell_(paymentRow, paymentColumns, "รูปหลักฐาน (JSON)"), [])[evidenceIndex] || null
+        : parseDebtJson_(readCell_(paymentRow, paymentColumns, "รูปหลักฐานการชำระ (JSON)"), [])[evidenceIndex] || null
+      : eventId
+        ? parseDebtJson_(readCell_(paymentRow, paymentColumns, "ลายเซ็น (JSON)"), null)
+        : parseDebtJson_(readCell_(paymentRow, paymentColumns, "ลายเซ็นผู้รับเงิน (JSON)"), null);
   }
   if (!metadata || !metadata.fileId) throw new Error("Debt evidence was not found");
 
@@ -438,7 +618,10 @@ function validateDebt_(input) {
 function validateDebtPayment_(input) {
   if (!input || typeof input !== "object") throw new Error("Debt payment is required");
   const debtId = String(input.debtId || "").trim();
+  const eventId = String(input.eventId || "EVENT-" + Utilities.getUuid()).trim();
+  const eventType = String(input.eventType || "installment");
   const installmentNumber = Number(input.installmentNumber);
+  const amount = input.amount === undefined || input.amount === null || input.amount === "" ? null : Math.round(Number(input.amount) * 100) / 100;
   const paidAt = String(input.paidAt || "");
   const note = String(input.note || "").trim();
   const validDate = function (value) {
@@ -449,15 +632,18 @@ function validateDebtPayment_(input) {
   };
   const today = Utilities.formatDate(new Date(), "Asia/Bangkok", "yyyy-MM-dd");
   const evidence = Array.isArray(input.evidence) ? input.evidence : [];
-  if (!/^[A-Za-z0-9_-]{8,80}$/.test(debtId) || !Number.isInteger(installmentNumber) || installmentNumber < 1 || installmentNumber > 120) {
+  if (!/^[A-Za-z0-9_-]{8,80}$/.test(debtId) || !/^[A-Za-z0-9_-]{8,80}$/.test(eventId) ||
+    ["installment", "earlyClose"].indexOf(eventType) < 0 ||
+    (eventType === "earlyClose" ? installmentNumber !== 0 : !Number.isInteger(installmentNumber) || installmentNumber < 1 || installmentNumber > 120)) {
     throw new Error("Debt payment identity is invalid");
   }
-  if (!validDate(paidAt) || paidAt > today || note.length > 300 || evidence.length < 1 || evidence.length > 3) {
+  if (!validDate(paidAt) || paidAt > today || note.length > 300 || evidence.length < 1 || evidence.length > 3 ||
+    (amount !== null && (!Number.isFinite(amount) || amount <= 0 || amount > 100000000))) {
     throw new Error("Debt payment data is invalid");
   }
   evidence.forEach(validateDebtMedia_);
   const signature = validateDebtMedia_(input.signature, true);
-  return { debtId: debtId, installmentNumber: installmentNumber, paidAt: paidAt, note: note, evidence: evidence, signature: signature };
+  return { debtId: debtId, eventId: eventId, eventType: eventType, installmentNumber: installmentNumber, amount: amount, paidAt: paidAt, note: note, evidence: evidence, signature: signature };
 }
 
 function validateDebtMedia_(media, signatureOnly) {
@@ -500,14 +686,17 @@ function ensureDebtSheets_() {
   const spreadsheet = getSpreadsheet_();
   let debts = spreadsheet.getSheetByName(TAB_DEBTS);
   let payments = spreadsheet.getSheetByName(TAB_DEBT_PAYMENTS);
+  let events = spreadsheet.getSheetByName(TAB_DEBT_EVENTS);
   if (!debts) debts = spreadsheet.insertSheet(TAB_DEBTS);
   if (!payments) payments = spreadsheet.insertSheet(TAB_DEBT_PAYMENTS);
+  if (!events) events = spreadsheet.insertSheet(TAB_DEBT_EVENTS);
   ensureTableHeaders_(debts, DEBT_HEADERS, "Debts");
   ensureTableHeaders_(payments, DEBT_PAYMENT_HEADERS, "Debt Payments");
-  return { debts: debts, payments: payments };
+  ensureTableHeaders_(events, DEBT_EVENT_HEADERS, "Debt Events");
+  return { debts: debts, payments: payments, events: events };
 }
 
-function debtFromRow_(row, columns, payments) {
+function debtFromRow_(row, columns, payments, events) {
   const debt = {
     id: String(readCell_(row, columns, "Debt ID") || ""),
     lender: String(readCell_(row, columns, "ผู้ให้ยืม") || ""),
@@ -523,16 +712,30 @@ function debtFromRow_(row, columns, payments) {
     lenderSignature: publicDebtEvidence_(parseDebtJson_(readCell_(row, columns, "ลายเซ็นผู้ยืม (JSON)"), null)),
     createdAt: dateToIso_(readCell_(row, columns, "วันที่บันทึก")),
     payments: payments || [],
+    events: events || [],
   };
+  (debt.events || []).forEach(function (event) {
+    if (event.type === "correction" && event.after && typeof event.after === "object") {
+      DEBT_EDIT_FIELDS.forEach(function (field) {
+        if (Object.prototype.hasOwnProperty.call(event.after, field)) debt[field] = event.after[field];
+      });
+    }
+  });
   const schedule = buildDebtSchedule_(debt);
   const totalAmount = debtAmount_(debt);
-  const paidAmount = Math.round(schedule.filter(function (item) { return item.paid; }).reduce(function (sum, item) { return sum + item.amount; }, 0) * 100) / 100;
+  const receivedAmount = Math.round((debt.payments || []).reduce(function (sum, payment) { return sum + Number(payment.amount || 0); }, 0) * 100) / 100;
+  const earlyClose = (debt.payments || []).some(function (payment) { return payment.eventType === "earlyClose"; });
+  const cancelled = (debt.events || []).some(function (event) { return event.type === "cancellation"; });
+  const paidAmount = receivedAmount;
   debt.schedule = schedule;
   debt.totalAmount = totalAmount;
   debt.paidAmount = paidAmount;
-  debt.remainingAmount = Math.round((totalAmount - paidAmount) * 100) / 100;
+  debt.receivedAmount = receivedAmount;
+  debt.remainingAmount = cancelled || earlyClose ? 0 : Math.round(Math.max(0, totalAmount - paidAmount) * 100) / 100;
+  debt.cancelled = cancelled;
+  debt.earlyClose = earlyClose;
   debt.paidCount = schedule.filter(function (item) { return item.paid; }).length;
-  debt.complete = schedule.length > 0 && debt.paidCount === schedule.length;
+  debt.complete = !cancelled && schedule.length > 0 && (earlyClose || debt.paidCount === schedule.length);
   return debt;
 }
 
@@ -543,7 +746,13 @@ function buildDebtSchedule_(debt) {
   const regularCents = Math.floor(totalCents / months);
   let remainingCents = totalCents;
   const paidByNumber = {};
-  (debt.payments || []).forEach(function (payment) { paidByNumber[Number(payment.installmentNumber)] = payment; });
+  let earlyClose = null;
+  (debt.payments || []).forEach(function (payment) {
+    if (payment.eventType === "earlyClose") { earlyClose = payment; return; }
+    const number = Number(payment.installmentNumber);
+    if (!paidByNumber[number]) paidByNumber[number] = [];
+    paidByNumber[number].push(payment);
+  });
   return Array.from({ length: months }, function (ignored, index) {
     const installmentNumber = index + 1;
     const amountCents = index === months - 1 ? remainingCents : regularCents;
@@ -555,17 +764,26 @@ function buildDebtSchedule_(debt) {
     const dueDay = Math.min(parts[2], new Date(Date.UTC(dueYear, dueMonth + 1, 0)).getUTCDate());
     const monthText = String(dueMonth + 1).padStart(2, "0");
     const dueDate = String(dueYear) + "-" + monthText + "-" + String(dueDay).padStart(2, "0");
-    const payment = paidByNumber[installmentNumber];
+    const paymentEvents = paidByNumber[installmentNumber] || [];
+    const scheduledAmount = amountCents / 100;
+    const paidAmount = Math.round(paymentEvents.reduce(function (sum, item) { return sum + (Number(item.amount) > 0 ? Number(item.amount) : scheduledAmount); }, 0) * 100) / 100;
+    const remainingAmount = earlyClose ? 0 : Math.round(Math.max(0, scheduledAmount - paidAmount) * 100) / 100;
+    const paid = Boolean(earlyClose) || remainingAmount <= 0.005;
+    const lastPayment = paymentEvents.length ? paymentEvents[paymentEvents.length - 1] : null;
     return {
       installmentNumber: installmentNumber,
       month: String(dueYear) + "-" + monthText,
       dueDate: dueDate,
-      amount: amountCents / 100,
-      paid: Boolean(payment),
-      paidAt: payment ? payment.paidAt : "",
-      evidence: payment ? payment.evidence : [],
-      signature: payment ? payment.signature : null,
-      note: payment ? payment.note : "",
+      amount: scheduledAmount,
+      paidAmount: paid ? scheduledAmount : Math.min(scheduledAmount, paidAmount),
+      remainingAmount: remainingAmount,
+      paid: paid,
+      settledByEarlyClose: Boolean(earlyClose),
+      paidAt: earlyClose ? earlyClose.paidAt : paid && lastPayment ? lastPayment.paidAt : "",
+      evidence: lastPayment ? lastPayment.evidence : [],
+      signature: lastPayment ? lastPayment.signature : null,
+      note: lastPayment ? lastPayment.note : "",
+      paymentEvents: paymentEvents,
     };
   });
 }
@@ -588,6 +806,15 @@ function findDebtPaymentRow_(sheet, columns, debtId, installmentNumber) {
   for (let index = 0; index < rows.length; index += 1) {
     if (String(readCell_(rows[index], columns, "Debt ID") || "") === debtId &&
       Number(readCell_(rows[index], columns, "งวดที่") || 0) === Number(installmentNumber)) return index + 2;
+  }
+  return -1;
+}
+
+function findDebtEventRow_(sheet, columns, eventId) {
+  if (sheet.getLastRow() < 2) return -1;
+  const rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).getValues();
+  for (let index = 0; index < rows.length; index += 1) {
+    if (String(readCell_(rows[index], columns, "Event ID") || "") === eventId) return index + 2;
   }
   return -1;
 }

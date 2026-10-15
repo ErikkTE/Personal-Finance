@@ -5,3 +5,8 @@ dist/
 .env
 .env.*
 !.env.example
+
+# Google OAuth client and local token files
+apps-script-oauth-client*.json
+apps-script-oauth-token*.json
+client_secret_*.json

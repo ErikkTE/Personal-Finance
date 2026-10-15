@@ -161,12 +161,22 @@ export async function recordDebtPayment(payment) {
   return result.debt;
 }
 
-export async function getDebtEvidencePreview({ id, kind, index = 0, installmentNumber = 0 }, signal) {
+export async function recordDebtEvent(event) {
+  const result = await requestJson("/api/debts", {
+    method: "POST",
+    body: JSON.stringify({ event }),
+  });
+  if (!result?.debt) throw new Error("Google Sheets ไม่ได้ยืนยันการบันทึกประวัติทวงหนี้");
+  return result.debt;
+}
+
+export async function getDebtEvidencePreview({ id, kind, index = 0, installmentNumber = 0, paymentId = "" }, signal) {
   const query = new URLSearchParams({
     id: String(id),
     kind: String(kind),
     index: String(index),
     installmentNumber: String(installmentNumber),
+    paymentId: String(paymentId || ""),
   });
   const response = await fetch("/api/debt-evidence?" + query.toString(), {
     credentials: "same-origin",
