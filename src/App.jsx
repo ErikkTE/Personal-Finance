@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "./icons";
 import CategorySelect from "./CategorySelect";
 import {
@@ -57,10 +57,9 @@ import {
   signIn,
   signOut,
 } from "./api";
-import { readReceipt } from "./receipt-ocr";
-import RecurringExpensesView from "./RecurringExpensesView";
+const RecurringExpensesView = lazy(() => import("./RecurringExpensesView"));
 import { recurringExpenseCategories, recurringExpenseMonthValues, summarizeFixedCommitments } from "./recurring-expenses";
-import DebtCollectionView from "./DebtCollectionView";
+const DebtCollectionView = lazy(() => import("./DebtCollectionView"));
 import { makeDebtId, summarizeDebt, validateDebtEventInput, validateDebtInput, validateDebtPaymentInput } from "./debts";
 
 const navItems = [
@@ -918,11 +917,11 @@ function App() {
     setDraft(nextDraft);
     if (!file.type.startsWith("image/")) return;
 
-    readReceipt(file, ({ status, progress }) => {
+    import("./receipt-ocr").then(({ readReceipt }) => readReceipt(file, ({ status, progress }) => {
       setDraft((current) => current?.sourceFile === file
         ? { ...current, ocrProgress: progress, ocrPhase: status }
         : current);
-    }).then((result) => {
+    })).then((result) => {
       setDraft((current) => {
         if (current?.sourceFile !== file) return current;
         const date = result.date || current.date;
@@ -1200,6 +1199,7 @@ function App() {
         />
         <main className="content-area">
           <div className="active-view" key={activeView}>
+          <Suspense fallback={<div className="view-loading" role="status" aria-live="polite">กำลังเปิดหน้านี้…</div>}>
           {activeView === "overview" && (
             <Overview
               summary={summary}
@@ -1295,6 +1295,7 @@ function App() {
             />
           )}
           {activeView === "coach" && <CoachView summary={summary} selectedMonth={selectedMonth} />}
+          </Suspense>
           </div>
         </main>
       </div>
